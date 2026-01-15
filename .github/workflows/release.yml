@@ -1,0 +1,127 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        default: 'dev'
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            asset_name: evpn-ninja-linux-amd64
+          - os: macos-latest
+            target: macos-intel
+            asset_name: evpn-ninja-macos-amd64
+          - os: macos-14
+            target: macos-arm
+            asset_name: evpn-ninja-macos-arm64
+          - os: windows-latest
+            target: windows
+            asset_name: evpn-ninja-windows-amd64.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller --onefile --name ${{ matrix.asset_name }} src/evpn_ninja/__main__.py
+          chmod +x dist/${{ matrix.asset_name }}
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --onefile --name evpn-ninja-windows-amd64 src/evpn_ninja/__main__.py
+
+      - name: Test binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./dist/${{ matrix.asset_name }} --version
+          ./dist/${{ matrix.asset_name }} --help
+
+      - name: Test binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          ./dist/evpn-ninja-windows-amd64.exe --version
+          ./dist/evpn-ninja-windows-amd64.exe --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}*
+          retention-days: 5
+
+  create-release:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          # Linux
+          cp artifacts/evpn-ninja-linux-amd64/evpn-ninja-linux-amd64 release/
+          chmod +x release/evpn-ninja-linux-amd64
+          # macOS Intel
+          cp artifacts/evpn-ninja-macos-amd64/evpn-ninja-macos-amd64 release/
+          chmod +x release/evpn-ninja-macos-amd64
+          # macOS ARM
+          cp artifacts/evpn-ninja-macos-arm64/evpn-ninja-macos-arm64 release/
+          chmod +x release/evpn-ninja-macos-arm64
+          # Windows
+          cp artifacts/evpn-ninja-windows-amd64.exe/evpn-ninja-windows-amd64.exe release/
+          # Create checksums
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/evpn-ninja-linux-amd64
+            release/evpn-ninja-macos-amd64
+            release/evpn-ninja-macos-arm64
+            release/evpn-ninja-windows-amd64.exe
+            release/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
