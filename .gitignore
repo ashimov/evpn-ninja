@@ -48,8 +48,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Tests folder - not needed in distribution
-tests/
 
 # Translations
 *.mo
@@ -98,9 +96,6 @@ Desktop.ini
 *.temp
 *.log
 *.bak
-
-# Claude Code
-.claude/
 
 # Pre-commit (removed from project)
 .pre-commit-config.yaml
