@@ -4,6 +4,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from ipaddress import IPv4Network
 
+# Maximum allowed values to prevent resource exhaustion
+MAX_VTEP_COUNT = 10000
+MAX_SPINE_COUNT = 1000
+MAX_VNI_COUNT = 16777215  # Maximum VNI value (2^24 - 1)
+MAX_HOSTS_PER_VTEP = 100000
+
 
 class ReplicationMode(str, Enum):
     """BUM traffic replication mode."""
@@ -153,7 +159,6 @@ def validate_fabric_networks(
     # Check capacity
     total_switches = vtep_count + spine_count
     p2p_links = vtep_count * spine_count
-    p2p_addresses_needed = p2p_links * 2  # 2 addresses per /31 link
 
     capacity_checks = [
         (loopback_net, "Loopback network", total_switches),
@@ -161,19 +166,29 @@ def validate_fabric_networks(
     ]
 
     for net, name, required in capacity_checks:
-        warning = _check_network_capacity(net, name, required)
-        if warning:
-            warnings.append(warning)
+        capacity_warning = _check_network_capacity(net, name, required)
+        if capacity_warning:
+            warnings.append(capacity_warning)
 
     # P2P network capacity (needs subnets, not just addresses)
-    p2p_subnets_available = 2 ** (31 - p2p_net.prefixlen)
-    if p2p_subnets_available < p2p_links:
+    # Handle edge case where prefixlen >= 31 (no room for /31 subnets)
+    if p2p_net.prefixlen >= 31:
+        p2p_subnets_available = 0
         warnings.append(CapacityWarning(
             resource="P2P /31 subnets",
             required=p2p_links,
-            available=p2p_subnets_available,
-            message=f"P2P network ({p2p_net}) can provide {p2p_subnets_available} /31 subnets, but {p2p_links} required",
+            available=0,
+            message=f"P2P network ({p2p_net}) prefix length is too large (/{p2p_net.prefixlen}) to create /31 subnets",
         ))
+    else:
+        p2p_subnets_available = 2 ** (31 - p2p_net.prefixlen)
+        if p2p_subnets_available < p2p_links:
+            warnings.append(CapacityWarning(
+                resource="P2P /31 subnets",
+                required=p2p_links,
+                available=p2p_subnets_available,
+                message=f"P2P network ({p2p_net}) can provide {p2p_subnets_available} /31 subnets, but {p2p_links} required",
+            ))
 
     return warnings
 
@@ -217,15 +232,23 @@ def calculate_fabric_params(
     Raises:
         ValueError: If input parameters are invalid
     """
-    # Validate input parameters
+    # Validate input parameters with both lower and upper bounds
     if vtep_count <= 0:
         raise ValueError(f"vtep_count must be positive, got {vtep_count}")
+    if vtep_count > MAX_VTEP_COUNT:
+        raise ValueError(f"vtep_count must be <= {MAX_VTEP_COUNT}, got {vtep_count}")
     if spine_count <= 0:
         raise ValueError(f"spine_count must be positive, got {spine_count}")
+    if spine_count > MAX_SPINE_COUNT:
+        raise ValueError(f"spine_count must be <= {MAX_SPINE_COUNT}, got {spine_count}")
     if vni_count <= 0:
         raise ValueError(f"vni_count must be positive, got {vni_count}")
+    if vni_count > MAX_VNI_COUNT:
+        raise ValueError(f"vni_count must be <= {MAX_VNI_COUNT}, got {vni_count}")
     if hosts_per_vtep < 0:
         raise ValueError(f"hosts_per_vtep must be non-negative, got {hosts_per_vtep}")
+    if hosts_per_vtep > MAX_HOSTS_PER_VTEP:
+        raise ValueError(f"hosts_per_vtep must be <= {MAX_HOSTS_PER_VTEP}, got {hosts_per_vtep}")
 
     # Validate networks for overlaps and capacity
     warnings = validate_fabric_networks(

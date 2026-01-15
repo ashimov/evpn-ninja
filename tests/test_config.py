@@ -471,3 +471,120 @@ class TestConfigReadError:
         finally:
             # Restore permissions for cleanup
             config_path.chmod(0o644)
+
+
+class TestConfigValidation:
+    """Tests for config validation."""
+
+    def test_mtu_payload_size_negative_rejected(self) -> None:
+        """Test that negative payload size is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="payload_size must be positive"):
+            MTUDefaults(payload_size=-1)
+
+    def test_mtu_payload_size_zero_rejected(self) -> None:
+        """Test that zero payload size is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="payload_size must be positive"):
+            MTUDefaults(payload_size=0)
+
+    def test_mtu_invalid_underlay_type_rejected(self) -> None:
+        """Test that invalid underlay type is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="underlay_type must be one of"):
+            MTUDefaults(underlay_type="invalid")
+
+    def test_mtu_vlan_tags_out_of_range_rejected(self) -> None:
+        """Test that vlan tags out of range are rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="outer_vlan_tags must be between"):
+            MTUDefaults(outer_vlan_tags=3)
+
+    def test_vni_invalid_scheme_rejected(self) -> None:
+        """Test that invalid VNI scheme is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="scheme must be one of"):
+            VNIDefaults(scheme="invalid-scheme")
+
+    def test_vni_base_vni_too_large_rejected(self) -> None:
+        """Test that base_vni exceeding max is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="base_vni must be between"):
+            VNIDefaults(base_vni=16777216)
+
+    def test_vni_start_vlan_out_of_range_rejected(self) -> None:
+        """Test that start_vlan out of range is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="start_vlan must be between"):
+            VNIDefaults(start_vlan=5000)
+
+    def test_fabric_invalid_replication_mode_rejected(self) -> None:
+        """Test that invalid replication mode is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="replication_mode must be one of"):
+            FabricDefaults(replication_mode="invalid")
+
+    def test_fabric_negative_hosts_rejected(self) -> None:
+        """Test that negative hosts_per_vtep is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="hosts_per_vtep must be non-negative"):
+            FabricDefaults(hosts_per_vtep=-1)
+
+    def test_evpn_bgp_as_too_large_rejected(self) -> None:
+        """Test that BGP AS exceeding max is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="bgp_as must be between"):
+            EVPNDefaults(bgp_as=4294967296)
+
+    def test_ebgp_invalid_scheme_rejected(self) -> None:
+        """Test that invalid eBGP scheme is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="scheme must be one of"):
+            EBGPDefaults(scheme="invalid-asn-scheme")
+
+    def test_multicast_invalid_scheme_rejected(self) -> None:
+        """Test that invalid multicast scheme is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="scheme must be one of"):
+            MulticastDefaults(scheme="invalid-scheme")
+
+    def test_output_invalid_format_rejected(self) -> None:
+        """Test that invalid output format is rejected."""
+        from evpn_ninja.config import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="format must be one of"):
+            OutputSettings(format="invalid")
+
+    def test_config_from_dict_invalid_values_uses_defaults(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that invalid values in config file fall back to defaults."""
+        data = {
+            "defaults": {
+                "mtu": {
+                    "payload_size": -100,  # Invalid - negative
+                }
+            }
+        }
+
+        config = Config.from_dict(data)
+
+        # Should use default values
+        assert config.mtu.payload_size == 1500
+
+        # Should print warning
+        captured = capsys.readouterr()
+        assert "Warning" in captured.err
+        assert "Invalid configuration" in captured.err

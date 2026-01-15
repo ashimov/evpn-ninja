@@ -1,56 +1,67 @@
 """EVPN Ninja - VXLAN/EVPN Fabric Calculator CLI."""
 
-from pathlib import Path
-from typing import Annotated, Any, Optional
 import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Annotated, Any, cast
 
 import typer
 import yaml
 from rich.console import Console
 
 from evpn_ninja import __version__
-from evpn_ninja.output import (
-    OutputFormat,
-    output_json,
-    output_yaml,
-    output_table,
-    output_key_value,
-    output_config,
-    console,
-    configure_console,
+from evpn_ninja.calculators.bandwidth import LinkSpeed, calculate_bandwidth
+from evpn_ninja.calculators.ebgp import ASNScheme, calculate_ebgp_underlay
+from evpn_ninja.calculators.evpn import Vendor, calculate_evpn_params
+from evpn_ninja.calculators.fabric import ReplicationMode, calculate_fabric_params
+from evpn_ninja.calculators.mtu import UnderlayType, calculate_mtu
+from evpn_ninja.calculators.multicast import MulticastScheme, calculate_multicast_groups
+from evpn_ninja.calculators.multihoming import (
+    ESIType,
+    MultiHomingMode,
+    calculate_multihoming,
 )
-from evpn_ninja.config import (
-    Config,
-    load_config,
-    save_config,
-    get_preset,
-    list_presets,
-    BUILTIN_PRESETS,
-    DEFAULT_CONFIG_PATH,
-)
-from evpn_ninja.calculators.mtu import calculate_mtu, UnderlayType
-from evpn_ninja.calculators.vni import calculate_vni_allocation, VNIScheme
-from evpn_ninja.calculators.fabric import calculate_fabric_params, ReplicationMode
-from evpn_ninja.calculators.evpn import calculate_evpn_params, Vendor
-from evpn_ninja.calculators.ebgp import calculate_ebgp_underlay, ASNScheme
-from evpn_ninja.calculators.multicast import calculate_multicast_groups, MulticastScheme
 from evpn_ninja.calculators.route_reflector import (
-    calculate_route_reflector,
     RRPlacement,
     RRRedundancy,
+    calculate_route_reflector,
 )
-from evpn_ninja.calculators.bandwidth import calculate_bandwidth, LinkSpeed
 from evpn_ninja.calculators.topology import generate_topology
-from evpn_ninja.calculators.multihoming import (
-    calculate_multihoming,
-    MultiHomingMode,
-    ESIType,
+from evpn_ninja.calculators.vni import VNIScheme, calculate_vni_allocation
+from evpn_ninja.config import (
+    BUILTIN_PRESETS,
+    DEFAULT_CONFIG_PATH,
+    Config,
+    get_preset,
+    load_config,
+    save_config,
+)
+from evpn_ninja.output import (
+    OutputFormat,
+    configure_console,
+    console,
+    output_config,
+    output_json,
+    output_key_value,
+    output_table,
+    output_yaml,
 )
 from evpn_ninja.validators import (
     ipv4_address_callback,
-    network_callback,
     multicast_callback,
+    network_callback,
 )
+
+
+@dataclass
+class AppState:
+    """Application state stored in typer.Context."""
+
+    no_color: bool = False
+    verbose: bool = False
+    config: Config = field(default_factory=Config)
+    active_preset: str | None = None
+
 
 app = typer.Typer(
     name="evpn-ninja",
@@ -59,11 +70,12 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-# Global state for options
-_no_color = False
-_verbose = False
-_config: Config = Config()
-_active_preset: str | None = None
+
+def _get_state(ctx: typer.Context) -> AppState:
+    """Get application state from context, creating default if needed."""
+    if ctx.obj is None:
+        ctx.obj = AppState()
+    return cast("AppState", ctx.obj)
 
 
 def version_callback(value: bool) -> None:
@@ -73,39 +85,135 @@ def version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-def _list_presets_callback(value: bool) -> None:
+def _list_presets_callback(ctx: typer.Context, value: bool) -> None:
     """List available presets and exit."""
     if value:
         console.print("[bold]Built-in Presets:[/bold]")
         for name, preset in BUILTIN_PRESETS.items():
             console.print(f"  [cyan]{name}[/cyan]: {preset.description}")
 
-        if _config.presets:
+        # Load config to check for user presets
+        config = load_config()
+        if config.presets:
             console.print("\n[bold]User Presets:[/bold]")
-            for name, preset in _config.presets.items():
+            for name, preset in config.presets.items():
                 console.print(f"  [cyan]{name}[/cyan]: {preset.description}")
 
         raise typer.Exit()
 
 
-def _save_output(content: str, filepath: Path) -> None:
-    """Save output to file."""
-    filepath.write_text(content)
-    if not _no_color:
-        console.print(f"[green]Saved to {filepath}[/green]")
-    else:
-        print(f"Saved to {filepath}")
+def _validate_output_path(filepath: Path, base_dir: Path | None = None) -> Path:
+    """Validate that output path is safe (no path traversal).
+
+    Args:
+        filepath: The target file path
+        base_dir: Base directory to restrict writes to (default: current working directory)
+
+    Returns:
+        Resolved absolute path
+
+    Raises:
+        typer.Exit: If path traversal is detected
+    """
+    if base_dir is None:
+        base_dir = Path.cwd()
+
+    # Resolve to absolute path
+    resolved = filepath.resolve()
+    base_resolved = base_dir.resolve()
+
+    # Check if resolved path is within allowed directory
+    try:
+        resolved.relative_to(base_resolved)
+    except ValueError:
+        console.print(f"[red]Error: Path traversal detected. File must be within {base_resolved}[/red]")
+        console.print(f"[red]Attempted path: {filepath} -> {resolved}[/red]")
+        raise typer.Exit(1) from None
+
+    return resolved
 
 
-def _get_console() -> Console:
+def _save_output(content: str, filepath: Path, no_color: bool = False) -> None:
+    """Save output to file with path validation and error handling."""
+    # Validate path is safe
+    safe_path = _validate_output_path(filepath)
+
+    try:
+        # Ensure parent directory exists
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_path.write_text(content)
+        if not no_color:
+            console.print(f"[green]Saved to {safe_path}[/green]")
+        else:
+            print(f"Saved to {safe_path}")
+    except PermissionError:
+        console.print(f"[red]Error: Permission denied writing to {safe_path}[/red]")
+        raise typer.Exit(1) from None
+    except OSError as e:
+        console.print(f"[red]Error writing file {safe_path}: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+def _safe_write_file(filepath: Path, content: str, base_dir: Path | None = None) -> None:
+    """Safely write content to file with path validation and error handling.
+
+    Args:
+        filepath: Target file path
+        content: Content to write
+        base_dir: Base directory to restrict writes to (default: current working directory)
+
+    Raises:
+        typer.Exit: On path traversal, permission error, or other I/O errors
+    """
+    safe_path = _validate_output_path(filepath, base_dir)
+
+    try:
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_path.write_text(content)
+    except PermissionError:
+        console.print(f"[red]Error: Permission denied writing to {safe_path}[/red]")
+        raise typer.Exit(1) from None
+    except OSError as e:
+        console.print(f"[red]Error writing file {safe_path}: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+def _safe_mkdir(dirpath: Path, base_dir: Path | None = None) -> Path:
+    """Safely create directory with path validation.
+
+    Args:
+        dirpath: Directory path to create
+        base_dir: Base directory to restrict writes to (default: current working directory)
+
+    Returns:
+        Resolved absolute path to the directory
+
+    Raises:
+        typer.Exit: On path traversal, permission error, or other I/O errors
+    """
+    safe_path = _validate_output_path(dirpath, base_dir)
+
+    try:
+        safe_path.mkdir(parents=True, exist_ok=True)
+        return safe_path
+    except PermissionError:
+        console.print(f"[red]Error: Permission denied creating directory {safe_path}[/red]")
+        raise typer.Exit(1) from None
+    except OSError as e:
+        console.print(f"[red]Error creating directory {safe_path}: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+def _get_console(no_color: bool = False) -> Console:
     """Get console with color settings."""
-    return Console(no_color=_no_color, force_terminal=not _no_color)
+    return Console(no_color=no_color, force_terminal=not no_color)
 
 
-def _get_default(section: str, key: str, fallback: Any = None) -> Any:
+def _get_default(config: Config, section: str, key: str, fallback: Any = None) -> Any:
     """Get default value from config.
 
     Args:
+        config: Config object
         section: Config section (mtu, vni, fabric, evpn, ebgp, multicast)
         key: Key within the section
         fallback: Fallback value if not found
@@ -113,7 +221,7 @@ def _get_default(section: str, key: str, fallback: Any = None) -> Any:
     Returns:
         Value from config or fallback
     """
-    section_obj = getattr(_config, section, None)
+    section_obj = getattr(config, section, None)
     if section_obj is None:
         return fallback
     return getattr(section_obj, key, fallback)
@@ -121,20 +229,21 @@ def _get_default(section: str, key: str, fallback: Any = None) -> Any:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--version", "-V", callback=version_callback, is_eager=True, help="Show version")
     ] = None,
     config_file: Annotated[
-        Optional[Path],
-        typer.Option("--config", "-c", help="Path to config file (default: ~/.vxlan.yaml)")
+        Path | None,
+        typer.Option("--config", "-c", help="Path to config file (default: ~/.evpn-ninja.yaml)")
     ] = None,
     preset: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--preset", "-P", help="Use preset configuration (small-dc, medium-dc, large-dc, etc.)")
     ] = None,
     list_presets_flag: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--list-presets", callback=_list_presets_callback, is_eager=True, help="List available presets")
     ] = None,
     no_color: Annotated[
@@ -149,56 +258,54 @@ def main(
     """VXLAN/EVPN Calculator CLI.
 
     Configuration can be loaded from:
-    - ~/.vxlan.yaml (default)
+    - ~/.evpn-ninja.yaml (default)
     - Custom file via --config
     - Built-in presets via --preset (small-dc, medium-dc, large-dc, multi-tenant, campus)
     """
-    global _no_color, _verbose, _config, _active_preset
-    _no_color = no_color
-    _verbose = verbose
+    # Initialize state in context
+    state = AppState(no_color=no_color, verbose=verbose)
+    ctx.obj = state
+
     if no_color:
         configure_console(no_color=True)
 
     # Load config file
-    _config = load_config(config_file)
+    state.config = load_config(config_file)
 
     # Apply preset if specified
     if preset:
-        _active_preset = preset
-        # Check built-in presets first
-        if preset in BUILTIN_PRESETS:
-            preset_obj = BUILTIN_PRESETS[preset]
-        else:
-            preset_obj = get_preset(_config, preset)
+        state.active_preset = preset
+        # Check built-in presets first, then user presets
+        preset_obj = BUILTIN_PRESETS.get(preset) or get_preset(state.config, preset)
 
         if not preset_obj:
             console.print(f"[red]Unknown preset: {preset}[/red]")
             console.print("Use --list-presets to see available presets")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         # Merge preset into config defaults
         if preset_obj.fabric:
             for key, val in preset_obj.fabric.items():
-                if hasattr(_config.fabric, key):
-                    setattr(_config.fabric, key, val)
+                if hasattr(state.config.fabric, key):
+                    setattr(state.config.fabric, key, val)
         if preset_obj.ebgp:
             for key, val in preset_obj.ebgp.items():
-                if hasattr(_config.ebgp, key):
-                    setattr(_config.ebgp, key, val)
+                if hasattr(state.config.ebgp, key):
+                    setattr(state.config.ebgp, key, val)
         if preset_obj.evpn:
             for key, val in preset_obj.evpn.items():
-                if hasattr(_config.evpn, key):
-                    setattr(_config.evpn, key, val)
+                if hasattr(state.config.evpn, key):
+                    setattr(state.config.evpn, key, val)
         if preset_obj.vni:
             for key, val in preset_obj.vni.items():
-                if hasattr(_config.vni, key):
-                    setattr(_config.vni, key, val)
+                if hasattr(state.config.vni, key):
+                    setattr(state.config.vni, key, val)
         if preset_obj.multicast:
             for key, val in preset_obj.multicast.items():
-                if hasattr(_config.multicast, key):
-                    setattr(_config.multicast, key, val)
+                if hasattr(state.config.multicast, key):
+                    setattr(state.config.multicast, key, val)
 
-        if _verbose:
+        if state.verbose:
             console.print(f"[dim]Using preset: {preset}[/dim]")
 
 
@@ -226,7 +333,7 @@ def mtu(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", "-s", help="Save output to file")
     ] = None,
 ) -> None:
@@ -271,16 +378,17 @@ def mtu(
 
 @app.command()
 def vni(
+    ctx: typer.Context,
     scheme: Annotated[
-        Optional[VNIScheme],
+        VNIScheme | None,
         typer.Option("--scheme", "-s", help="VNI allocation scheme")
     ] = None,
-    base_vni: Annotated[Optional[int], typer.Option("--base-vni", "-b", help="Base VNI number")] = None,
+    base_vni: Annotated[int | None, typer.Option("--base-vni", "-b", help="Base VNI number")] = None,
     tenant_id: Annotated[int, typer.Option("--tenant-id", "-t", help="Tenant ID (for tenant-based scheme)")] = 1,
-    start_vlan: Annotated[Optional[int], typer.Option("--start-vlan", help="Starting VLAN ID")] = None,
-    count: Annotated[Optional[int], typer.Option("--count", "-c", help="Number of VNIs to allocate")] = None,
+    start_vlan: Annotated[int | None, typer.Option("--start-vlan", help="Starting VLAN ID")] = None,
+    count: Annotated[int | None, typer.Option("--count", "-c", help="Number of VNIs to allocate")] = None,
     multicast_base: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--mcast-base", help="Base multicast address", callback=multicast_callback)
     ] = None,
     output: Annotated[
@@ -288,7 +396,7 @@ def vni(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -296,12 +404,13 @@ def vni(
 
     Uses values from config file or preset if not specified.
     """
+    state = _get_state(ctx)
     # Apply defaults from config
-    scheme = scheme if scheme is not None else VNIScheme(_config.vni.scheme)
-    base_vni = base_vni if base_vni is not None else _config.vni.base_vni
-    start_vlan = start_vlan if start_vlan is not None else _config.vni.start_vlan
-    count = count if count is not None else _config.vni.count
-    multicast_base = multicast_base if multicast_base is not None else _config.vni.multicast_base
+    scheme = scheme if scheme is not None else VNIScheme(state.config.vni.scheme)
+    base_vni = base_vni if base_vni is not None else state.config.vni.base_vni
+    start_vlan = start_vlan if start_vlan is not None else state.config.vni.start_vlan
+    count = count if count is not None else state.config.vni.count
+    multicast_base = multicast_base if multicast_base is not None else state.config.vni.multicast_base
 
     result = calculate_vni_allocation(
         scheme=scheme,
@@ -341,24 +450,25 @@ def vni(
 
 @app.command()
 def fabric(
-    vteps: Annotated[Optional[int], typer.Option("--vteps", help="Number of VTEP (leaf) switches")] = None,
-    spines: Annotated[Optional[int], typer.Option("--spines", help="Number of spine switches")] = None,
-    vnis: Annotated[Optional[int], typer.Option("--vnis", help="Total number of VNIs")] = None,
-    hosts: Annotated[Optional[int], typer.Option("--hosts", "-h", help="Average hosts per VTEP")] = None,
+    ctx: typer.Context,
+    vteps: Annotated[int | None, typer.Option("--vteps", help="Number of VTEP (leaf) switches")] = None,
+    spines: Annotated[int | None, typer.Option("--spines", help="Number of spine switches")] = None,
+    vnis: Annotated[int | None, typer.Option("--vnis", help="Total number of VNIs")] = None,
+    hosts: Annotated[int | None, typer.Option("--hosts", "-h", help="Average hosts per VTEP")] = None,
     replication: Annotated[
-        Optional[ReplicationMode],
+        ReplicationMode | None,
         typer.Option("--replication", "-r", help="BUM replication mode")
     ] = None,
     loopback_net: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--loopback-net", help="Loopback network", callback=network_callback)
     ] = None,
     vtep_net: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--vtep-net", help="VTEP loopback network", callback=network_callback)
     ] = None,
     p2p_net: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
     ] = None,
     output: Annotated[
@@ -366,7 +476,7 @@ def fabric(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -374,15 +484,16 @@ def fabric(
 
     Uses values from config file or preset if not specified.
     """
+    state = _get_state(ctx)
     # Apply defaults from config
-    vteps = vteps if vteps is not None else _config.fabric.vtep_count
-    spines = spines if spines is not None else _config.fabric.spine_count
-    vnis = vnis if vnis is not None else _config.fabric.vni_count
-    hosts = hosts if hosts is not None else _config.fabric.hosts_per_vtep
-    replication = replication if replication is not None else ReplicationMode(_config.fabric.replication_mode)
-    loopback_net = loopback_net if loopback_net is not None else _config.fabric.loopback_network
-    vtep_net = vtep_net if vtep_net is not None else _config.fabric.vtep_loopback_network
-    p2p_net = p2p_net if p2p_net is not None else _config.fabric.p2p_network
+    vteps = vteps if vteps is not None else state.config.fabric.vtep_count
+    spines = spines if spines is not None else state.config.fabric.spine_count
+    vnis = vnis if vnis is not None else state.config.fabric.vni_count
+    hosts = hosts if hosts is not None else state.config.fabric.hosts_per_vtep
+    replication = replication if replication is not None else ReplicationMode(state.config.fabric.replication_mode)
+    loopback_net = loopback_net if loopback_net is not None else state.config.fabric.loopback_network
+    vtep_net = vtep_net if vtep_net is not None else state.config.fabric.vtep_loopback_network
+    p2p_net = p2p_net if p2p_net is not None else state.config.fabric.p2p_network
 
     result = calculate_fabric_params(
         vtep_count=vteps,
@@ -458,17 +569,18 @@ def fabric(
 
 @app.command()
 def evpn(
-    bgp_as: Annotated[Optional[int], typer.Option("--as", help="BGP AS number")] = None,
+    ctx: typer.Context,
+    bgp_as: Annotated[int | None, typer.Option("--as", help="BGP AS number")] = None,
     loopback: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--loopback", "-l", help="VTEP loopback IP", callback=ipv4_address_callback)
     ] = None,
     l2_vni: Annotated[int, typer.Option("--l2-vni", help="Layer 2 VNI")] = 10010,
     vlan_id: Annotated[int, typer.Option("--vlan", help="VLAN ID")] = 10,
-    l3_vni: Annotated[Optional[int], typer.Option("--l3-vni", help="Layer 3 VNI (optional)")] = None,
-    vrf_name: Annotated[Optional[str], typer.Option("--vrf", help="VRF name (optional)")] = None,
+    l3_vni: Annotated[int | None, typer.Option("--l3-vni", help="Layer 3 VNI (optional)")] = None,
+    vrf_name: Annotated[str | None, typer.Option("--vrf", help="VRF name (optional)")] = None,
     vendor: Annotated[
-        Optional[list[Vendor]],
+        list[Vendor] | None,
         typer.Option("--vendor", help="Vendor(s) to generate config for")
     ] = None,
     output: Annotated[
@@ -476,7 +588,7 @@ def evpn(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -484,13 +596,14 @@ def evpn(
 
     Uses values from config file or preset if not specified.
     """
+    state = _get_state(ctx)
     # Apply defaults from config
-    bgp_as = bgp_as if bgp_as is not None else _config.evpn.bgp_as
-    loopback = loopback if loopback is not None else _config.evpn.loopback_ip
+    bgp_as = bgp_as if bgp_as is not None else state.config.evpn.bgp_as
+    loopback = loopback if loopback is not None else state.config.evpn.loopback_ip
 
     # Use configured vendors if none specified and config has vendors
-    if vendor is None and _config.evpn.vendors:
-        vendor = [Vendor(v) for v in _config.evpn.vendors]
+    if vendor is None and state.config.evpn.vendors:
+        vendor = [Vendor(v) for v in state.config.evpn.vendors]
 
     result = calculate_evpn_params(
         bgp_as=bgp_as,
@@ -550,22 +663,23 @@ def evpn(
 
 @app.command()
 def ebgp(
-    spines: Annotated[Optional[int], typer.Option("--spines", "-s", help="Number of spine switches")] = None,
-    leaves: Annotated[Optional[int], typer.Option("--leaves", "-l", help="Number of leaf switches")] = None,
+    ctx: typer.Context,
+    spines: Annotated[int | None, typer.Option("--spines", "-s", help="Number of spine switches")] = None,
+    leaves: Annotated[int | None, typer.Option("--leaves", "-l", help="Number of leaf switches")] = None,
     scheme: Annotated[
-        Optional[ASNScheme],
+        ASNScheme | None,
         typer.Option("--scheme", help="ASN allocation scheme")
     ] = None,
     base_asn: Annotated[
-        Optional[int],
+        int | None,
         typer.Option("--base-asn", help="Base ASN (for custom scheme)")
     ] = None,
     p2p_net: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
     ] = None,
     spine_same_asn: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--spine-same-asn/--spine-unique-asn", help="Spines share same ASN")
     ] = None,
     output: Annotated[
@@ -573,7 +687,7 @@ def ebgp(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -581,12 +695,13 @@ def ebgp(
 
     Uses values from config file or preset if not specified.
     """
+    state = _get_state(ctx)
     # Apply defaults from config
-    spines = spines if spines is not None else _config.ebgp.spine_count
-    leaves = leaves if leaves is not None else _config.ebgp.leaf_count
-    scheme = scheme if scheme is not None else ASNScheme(_config.ebgp.scheme)
-    p2p_net = p2p_net if p2p_net is not None else _config.ebgp.p2p_network
-    spine_same_asn = spine_same_asn if spine_same_asn is not None else _config.ebgp.spine_asn_same
+    spines = spines if spines is not None else state.config.ebgp.spine_count
+    leaves = leaves if leaves is not None else state.config.ebgp.leaf_count
+    scheme = scheme if scheme is not None else ASNScheme(state.config.ebgp.scheme)
+    p2p_net = p2p_net if p2p_net is not None else state.config.ebgp.p2p_network
+    spine_same_asn = spine_same_asn if spine_same_asn is not None else state.config.ebgp.spine_asn_same
 
     result = calculate_ebgp_underlay(
         spine_count=spines,
@@ -641,22 +756,23 @@ def ebgp(
 
 @app.command()
 def multicast(
-    vni_start: Annotated[Optional[int], typer.Option("--vni-start", help="Starting VNI")] = None,
-    vni_count: Annotated[Optional[int], typer.Option("--vni-count", "-c", help="Number of VNIs")] = None,
+    ctx: typer.Context,
+    vni_start: Annotated[int | None, typer.Option("--vni-start", help="Starting VNI")] = None,
+    vni_count: Annotated[int | None, typer.Option("--vni-count", "-c", help="Number of VNIs")] = None,
     scheme: Annotated[
-        Optional[MulticastScheme],
+        MulticastScheme | None,
         typer.Option("--scheme", "-s", help="Multicast allocation scheme")
     ] = None,
     base_group: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--base-group", "-g", help="Base multicast group address", callback=multicast_callback)
     ] = None,
     vnis_per_group: Annotated[
-        Optional[int],
+        int | None,
         typer.Option("--vnis-per-group", help="VNIs per group (for shared/range schemes)")
     ] = None,
     rp_address: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--rp", help="PIM Rendezvous Point address", callback=ipv4_address_callback)
     ] = None,
     output: Annotated[
@@ -664,7 +780,7 @@ def multicast(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -672,12 +788,13 @@ def multicast(
 
     Uses values from config file or preset if not specified.
     """
+    state = _get_state(ctx)
     # Apply defaults from config
-    vni_start = vni_start if vni_start is not None else _config.multicast.vni_start
-    vni_count = vni_count if vni_count is not None else _config.multicast.vni_count
-    scheme = scheme if scheme is not None else MulticastScheme(_config.multicast.scheme)
-    base_group = base_group if base_group is not None else _config.multicast.base_group
-    vnis_per_group = vnis_per_group if vnis_per_group is not None else _config.multicast.vnis_per_group
+    vni_start = vni_start if vni_start is not None else state.config.multicast.vni_start
+    vni_count = vni_count if vni_count is not None else state.config.multicast.vni_count
+    scheme = scheme if scheme is not None else MulticastScheme(state.config.multicast.scheme)
+    base_group = base_group if base_group is not None else state.config.multicast.base_group
+    vnis_per_group = vnis_per_group if vnis_per_group is not None else state.config.multicast.vnis_per_group
 
     result = calculate_multicast_groups(
         vni_start=vni_start,
@@ -749,7 +866,7 @@ def rr(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -838,7 +955,7 @@ def bandwidth(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -930,7 +1047,7 @@ def topology(
         typer.Option("--output", "-o", help="Data output format (json/yaml)")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save Graphviz DOT to file")
     ] = None,
 ) -> None:
@@ -1001,13 +1118,13 @@ def export(
     lab_name: Annotated[
         str,
         typer.Option("--lab-name", help="Containerlab lab name")
-    ] = "vxlan-fabric",
+    ] = "evpn-fabric",
     include_hosts: Annotated[
         bool,
         typer.Option("--include-hosts/--no-hosts", help="Include test hosts in containerlab")
     ] = False,
     output_dir: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--output-dir", "-o", help="Output directory for files")
     ] = None,
 ) -> None:
@@ -1022,25 +1139,19 @@ def export(
     - all: Export all formats
 
     Examples:
-        vxlan export ansible --spines 2 --leaves 4 --output-dir ./ansible
-        vxlan export nornir --platform nxos --output-dir ./nornir
-        vxlan export containerlab --platform eos --lab-name my-fabric
-        vxlan export eve-ng --platform eos --include-hosts
-        vxlan export gns3 --platform nxos --lab-name my-lab
-        vxlan export all --output-dir ./automation
+        evpn-ninja export ansible --spines 2 --leaves 4 --output-dir ./ansible
+        evpn-ninja export nornir --platform nxos --output-dir ./nornir
+        evpn-ninja export containerlab --platform eos --lab-name my-fabric
+        evpn-ninja export eve-ng --platform eos --include-hosts
+        evpn-ninja export gns3 --platform nxos --lab-name my-lab
+        evpn-ninja export all --output-dir ./automation
     """
     from ipaddress import IPv4Network
+
     from evpn_ninja.exporters.ansible import (
         export_ansible_inventory,
         export_ansible_vars,
         generate_ansible_playbook_template,
-    )
-    from evpn_ninja.exporters.nornir import (
-        export_nornir_inventory,
-        export_nornir_groups,
-        export_nornir_defaults,
-        generate_nornir_config,
-        generate_nornir_script_template,
     )
     from evpn_ninja.exporters.containerlab import (
         export_containerlab_topology,
@@ -1052,6 +1163,13 @@ def export(
         export_gns3_topology,
         generate_eve_ng_startup_scripts,
     )
+    from evpn_ninja.exporters.nornir import (
+        export_nornir_defaults,
+        export_nornir_groups,
+        export_nornir_inventory,
+        generate_nornir_config,
+        generate_nornir_script_template,
+    )
 
     format_type = format_type.lower()
     # Support "both" as alias for "all" for backward compatibility
@@ -1062,7 +1180,7 @@ def export(
     if format_type not in valid_formats:
         console.print(f"[red]Invalid format: {format_type}[/red]")
         console.print(f"Valid options: {', '.join(valid_formats)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Generate device lists
     loopback_network = IPv4Network(loopback_net)
@@ -1090,9 +1208,9 @@ def export(
             "asn": bgp_as,
         })
 
-    # Generate output
+    # Generate output with safe directory creation
     if output_dir:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = _safe_mkdir(output_dir)
 
     if format_type in ("ansible", "all"):
         inventory = export_ansible_inventory(spine_list, leaf_list, bgp_as)
@@ -1107,12 +1225,11 @@ def export(
         playbook = generate_ansible_playbook_template()
 
         if output_dir:
-            ansible_dir = output_dir / "ansible"
-            ansible_dir.mkdir(parents=True, exist_ok=True)
-            (ansible_dir / "inventory.yaml").write_text(inventory)
-            (ansible_dir / "group_vars" / "all.yaml").parent.mkdir(exist_ok=True)
-            (ansible_dir / "group_vars" / "all.yaml").write_text(group_vars)
-            (ansible_dir / "deploy.yaml").write_text(playbook)
+            ansible_dir = _safe_mkdir(output_dir / "ansible")
+            _safe_write_file(ansible_dir / "inventory.yaml", inventory)
+            _safe_mkdir(ansible_dir / "group_vars")
+            _safe_write_file(ansible_dir / "group_vars" / "all.yaml", group_vars)
+            _safe_write_file(ansible_dir / "deploy.yaml", playbook)
             console.print(f"[green]Ansible files written to {ansible_dir}[/green]")
         else:
             console.print("[bold]Ansible Inventory:[/bold]")
@@ -1133,15 +1250,13 @@ def export(
         script = generate_nornir_script_template()
 
         if output_dir:
-            nornir_dir = output_dir / "nornir"
-            nornir_dir.mkdir(parents=True, exist_ok=True)
-            inv_dir = nornir_dir / "inventory"
-            inv_dir.mkdir(exist_ok=True)
-            (inv_dir / "hosts.yaml").write_text(hosts)
-            (inv_dir / "groups.yaml").write_text(groups)
-            (inv_dir / "defaults.yaml").write_text(defaults)
-            (nornir_dir / "config.yaml").write_text(config)
-            (nornir_dir / "deploy.py").write_text(script)
+            nornir_dir = _safe_mkdir(output_dir / "nornir")
+            inv_dir = _safe_mkdir(nornir_dir / "inventory")
+            _safe_write_file(inv_dir / "hosts.yaml", hosts)
+            _safe_write_file(inv_dir / "groups.yaml", groups)
+            _safe_write_file(inv_dir / "defaults.yaml", defaults)
+            _safe_write_file(nornir_dir / "config.yaml", config)
+            _safe_write_file(nornir_dir / "deploy.py", script)
             console.print(f"[green]Nornir files written to {nornir_dir}[/green]")
         else:
             if format_type == "all":
@@ -1172,16 +1287,14 @@ def export(
         makefile = generate_makefile()
 
         if output_dir:
-            clab_dir = output_dir / "containerlab"
-            clab_dir.mkdir(parents=True, exist_ok=True)
-            (clab_dir / f"{lab_name}.clab.yml").write_text(topology)
-            (clab_dir / "Makefile").write_text(makefile)
+            clab_dir = _safe_mkdir(output_dir / "containerlab")
+            _safe_write_file(clab_dir / f"{lab_name}.clab.yml", topology)
+            _safe_write_file(clab_dir / "Makefile", makefile)
 
             # Write node configs
-            configs_dir = clab_dir / "configs"
-            configs_dir.mkdir(exist_ok=True)
+            configs_dir = _safe_mkdir(clab_dir / "configs")
             for node_name, config_content in configs.items():
-                (configs_dir / f"{node_name}.cfg").write_text(config_content)
+                _safe_write_file(configs_dir / f"{node_name}.cfg", config_content)
 
             console.print(f"[green]Containerlab files written to {clab_dir}[/green]")
             console.print(f"[dim]Deploy with: cd {clab_dir} && make deploy[/dim]")
@@ -1209,15 +1322,13 @@ def export(
         )
 
         if output_dir:
-            eve_dir = output_dir / "eve-ng"
-            eve_dir.mkdir(parents=True, exist_ok=True)
-            (eve_dir / f"{lab_name}.unl").write_text(eve_topology)
+            eve_dir = _safe_mkdir(output_dir / "eve-ng")
+            _safe_write_file(eve_dir / f"{lab_name}.unl", eve_topology)
 
             # Write startup configs
-            configs_dir = eve_dir / "configs"
-            configs_dir.mkdir(exist_ok=True)
+            configs_dir = _safe_mkdir(eve_dir / "configs")
             for node_name, config_content in eve_configs.items():
-                (configs_dir / f"{node_name}.cfg").write_text(config_content)
+                _safe_write_file(configs_dir / f"{node_name}.cfg", config_content)
 
             console.print(f"[green]EVE-NG files written to {eve_dir}[/green]")
             console.print("[dim]Import the .unl file into EVE-NG[/dim]")
@@ -1237,9 +1348,8 @@ def export(
         )
 
         if output_dir:
-            gns3_dir = output_dir / "gns3"
-            gns3_dir.mkdir(parents=True, exist_ok=True)
-            (gns3_dir / f"{lab_name}.gns3").write_text(gns3_topology)
+            gns3_dir = _safe_mkdir(output_dir / "gns3")
+            _safe_write_file(gns3_dir / f"{lab_name}.gns3", gns3_topology)
 
             console.print(f"[green]GNS3 files written to {gns3_dir}[/green]")
             console.print("[dim]Open the .gns3 file in GNS3[/dim]")
@@ -1268,13 +1378,13 @@ def completion(
     """Generate shell completion script.
 
     Examples:
-        vxlan completion bash > ~/.vxlan-complete.bash
-        echo 'source ~/.vxlan-complete.bash' >> ~/.bashrc
+        evpn-ninja completion bash > ~/.evpn-ninja-complete.bash
+        echo 'source ~/.evpn-ninja-complete.bash' >> ~/.bashrc
 
-        vxlan completion zsh > ~/.vxlan-complete.zsh
-        echo 'source ~/.vxlan-complete.zsh' >> ~/.zshrc
+        evpn-ninja completion zsh > ~/.evpn-ninja-complete.zsh
+        echo 'source ~/.evpn-ninja-complete.zsh' >> ~/.zshrc
 
-        vxlan completion fish > ~/.config/fish/completions/vxlan.fish
+        evpn-ninja completion fish > ~/.config/fish/completions/evpn-ninja.fish
     """
     shell = shell.lower()
     valid_shells = ["bash", "zsh", "fish", "powershell"]
@@ -1282,15 +1392,15 @@ def completion(
     if shell not in valid_shells:
         console.print(f"[red]Invalid shell: {shell}[/red]")
         console.print(f"Valid options: {', '.join(valid_shells)}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Generate completion script using typer's built-in support
-    env_var = "_VXLAN_COMPLETE"
-    script_name = "vxlan"
+    env_var = "_EVPN_NINJA_COMPLETE"
+    script_name = "evpn-ninja"
 
     if shell == "bash":
-        script = f'''# Bash completion for vxlan
-_{script_name}_completions() {{
+        script = f'''# Bash completion for evpn-ninja
+_evpn_ninja_completions() {{
     local IFS=$'\\n'
     COMPREPLY=( $(env COMP_WORDS="${{COMP_WORDS[*]}}" \\
                  COMP_CWORD=$COMP_CWORD \\
@@ -1298,23 +1408,23 @@ _{script_name}_completions() {{
                  {script_name}) )
     return 0
 }}
-complete -o default -F _{script_name}_completions {script_name}
+complete -o default -F _evpn_ninja_completions {script_name}
 '''
     elif shell == "zsh":
-        script = f'''#compdef vxlan
-_{script_name}_completions() {{
+        script = f'''#compdef evpn-ninja
+_evpn_ninja_completions() {{
     eval $(env _TYPER_COMPLETE_ARGS="${{words[1,$CURRENT]}}" \\
            {env_var}=complete_zsh \\
            {script_name})
 }}
-compdef _{script_name}_completions {script_name}
+compdef _evpn_ninja_completions {script_name}
 '''
     elif shell == "fish":
-        script = f'''# Fish completion for vxlan
+        script = f'''# Fish completion for evpn-ninja
 complete -c {script_name} -f -a "(env {env_var}=complete_fish COMP_WORDS=(commandline -cp) COMP_CWORD=(commandline -t) {script_name})"
 '''
     else:  # powershell
-        script = f'''# PowerShell completion for vxlan
+        script = f'''# PowerShell completion for evpn-ninja
 Register-ArgumentCompleter -Native -CommandName {script_name} -ScriptBlock {{
     param($wordToComplete, $commandAst, $cursorPosition)
     $env:{env_var} = 'complete_powershell'
@@ -1332,22 +1442,22 @@ Register-ArgumentCompleter -Native -CommandName {script_name} -ScriptBlock {{
         home = Path.home()
         if shell == "bash":
             config_file = home / ".bashrc"
-            source_line = f"\nsource ~/.vxlan-complete.bash"
-            completion_file = home / ".vxlan-complete.bash"
+            source_line = "\nsource ~/.evpn-ninja-complete.bash"
+            completion_file = home / ".evpn-ninja-complete.bash"
         elif shell == "zsh":
             config_file = home / ".zshrc"
-            source_line = f"\nsource ~/.vxlan-complete.zsh"
-            completion_file = home / ".vxlan-complete.zsh"
+            source_line = "\nsource ~/.evpn-ninja-complete.zsh"
+            completion_file = home / ".evpn-ninja-complete.zsh"
         elif shell == "fish":
             config_dir = home / ".config" / "fish" / "completions"
             config_dir.mkdir(parents=True, exist_ok=True)
-            completion_file = config_dir / "vxlan.fish"
+            completion_file = config_dir / "evpn-ninja.fish"
             config_file = None
             source_line = None
         else:
             config_file = home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
-            source_line = f"\n. ~\\vxlan-complete.ps1"
-            completion_file = home / "vxlan-complete.ps1"
+            source_line = "\n. ~\\evpn-ninja-complete.ps1"
+            completion_file = home / "evpn-ninja-complete.ps1"
 
         # Write completion script
         completion_file.write_text(script)
@@ -1383,40 +1493,41 @@ Register-ArgumentCompleter -Native -CommandName {script_name} -ScriptBlock {{
 # Config Command
 # =============================================================================
 
-config_app = typer.Typer(help="Manage VXLAN Calculator configuration")
+config_app = typer.Typer(help="Manage EVPN Ninja configuration")
 app.add_typer(config_app, name="config")
 
 
 @config_app.command("show")
-def config_show() -> None:
+def config_show(ctx: typer.Context) -> None:
     """Show current configuration."""
+    state = _get_state(ctx)
     config_data = {
         "config_file": str(DEFAULT_CONFIG_PATH),
         "config_exists": DEFAULT_CONFIG_PATH.exists(),
-        "active_preset": _active_preset,
+        "active_preset": state.active_preset,
         "defaults": {
             "mtu": {
-                "payload_size": _config.mtu.payload_size,
-                "underlay_type": _config.mtu.underlay_type,
+                "payload_size": state.config.mtu.payload_size,
+                "underlay_type": state.config.mtu.underlay_type,
             },
             "vni": {
-                "base_vni": _config.vni.base_vni,
-                "scheme": _config.vni.scheme,
-                "count": _config.vni.count,
+                "base_vni": state.config.vni.base_vni,
+                "scheme": state.config.vni.scheme,
+                "count": state.config.vni.count,
             },
             "fabric": {
-                "vtep_count": _config.fabric.vtep_count,
-                "spine_count": _config.fabric.spine_count,
-                "vni_count": _config.fabric.vni_count,
-                "replication_mode": _config.fabric.replication_mode,
+                "vtep_count": state.config.fabric.vtep_count,
+                "spine_count": state.config.fabric.spine_count,
+                "vni_count": state.config.fabric.vni_count,
+                "replication_mode": state.config.fabric.replication_mode,
             },
             "evpn": {
-                "bgp_as": _config.evpn.bgp_as,
-                "loopback_ip": _config.evpn.loopback_ip,
+                "bgp_as": state.config.evpn.bgp_as,
+                "loopback_ip": state.config.evpn.loopback_ip,
             },
             "ebgp": {
-                "scheme": _config.ebgp.scheme,
-                "spine_asn_same": _config.ebgp.spine_asn_same,
+                "scheme": state.config.ebgp.scheme,
+                "spine_asn_same": state.config.ebgp.spine_asn_same,
             },
         },
     }
@@ -1431,18 +1542,18 @@ def config_init(
         typer.Option("--force", "-f", help="Overwrite existing config file")
     ] = False,
 ) -> None:
-    """Initialize default configuration file at ~/.vxlan.yaml."""
+    """Initialize default configuration file at ~/.evpn-ninja.yaml."""
     if DEFAULT_CONFIG_PATH.exists() and not force:
         console.print(f"[yellow]Config file already exists: {DEFAULT_CONFIG_PATH}[/yellow]")
         console.print("Use --force to overwrite")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Create default config
     default_config = Config()
     save_config(default_config, DEFAULT_CONFIG_PATH)
     console.print(f"[green]Created config file: {DEFAULT_CONFIG_PATH}[/green]")
     console.print("\nEdit this file to customize your defaults.")
-    console.print("See 'vxlan config show' for current settings.")
+    console.print("See 'evpn-ninja config show' for current settings.")
 
 
 @config_app.command("path")
@@ -1472,7 +1583,7 @@ def multihoming(
         typer.Option("--system-mac", help="LACP system MAC address")
     ] = "00:00:00:00:00:01",
     vendor: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Option("--vendor", "-v", help="Vendor(s) to generate config for")
     ] = None,
     output: Annotated[
@@ -1480,7 +1591,7 @@ def multihoming(
         typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
     save: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--save", help="Save output to file")
     ] = None,
 ) -> None:
@@ -1577,8 +1688,9 @@ def multihoming(
 # =============================================================================
 
 @app.command()
-def presets() -> None:
+def presets(ctx: typer.Context) -> None:
     """List available presets with their configurations."""
+    state = _get_state(ctx)
     console.print("[bold]Built-in Presets:[/bold]\n")
 
     for name, preset in BUILTIN_PRESETS.items():
@@ -1594,9 +1706,9 @@ def presets() -> None:
             console.print(f"  [dim]EVPN:[/dim] {preset.evpn}")
         console.print()
 
-    if _config.presets:
+    if state.config.presets:
         console.print("[bold]User Presets (from config file):[/bold]\n")
-        for name, preset in _config.presets.items():
+        for name, preset in state.config.presets.items():
             console.print(f"[bold cyan]{name}[/bold cyan]")
             console.print(f"  {preset.description}")
             console.print()

@@ -260,7 +260,7 @@ Features:
 Calculate BGP Route Reflector placement for EVPN overlay.
 
 ```bash
-evpn-ninja rr --leaf-count 16 --placement spine --redundancy dual
+evpn-ninja rr --clients 16 --placement spine --redundancy pair
 ```
 
 ### Bandwidth Calculator
@@ -268,8 +268,8 @@ evpn-ninja rr --leaf-count 16 --placement spine --redundancy dual
 Estimate fabric bandwidth and oversubscription ratios.
 
 ```bash
-evpn-ninja bandwidth --leaf-count 8 --spine-count 4 \
-  --leaf-uplinks 4 --uplink-speed 100g --host-ports 48 --host-speed 25g
+evpn-ninja bandwidth --leaves 8 --spines 4 \
+  --uplinks 4 --uplink-speed 100g --downlinks 48 --downlink-speed 25g
 ```
 
 ---
@@ -514,7 +514,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 </p>
 
 <p align="center">
-  <a href="https://ashimov.com/tools/vxlan-calculator">Web Version</a> •
+  <a href="https://ashimov.com/tools/evpn-ninja">Web Version</a> •
   <a href="https://github.com/ashimov/evpn-ninja/issues">Report Bug</a> •
   <a href="https://github.com/ashimov/evpn-ninja/issues">Request Feature</a>
 </p>

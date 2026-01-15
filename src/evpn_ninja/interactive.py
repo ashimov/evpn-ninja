@@ -3,18 +3,18 @@
 import questionary
 from rich.console import Console
 
+from evpn_ninja.calculators.evpn import Vendor, calculate_evpn_params
+from evpn_ninja.calculators.fabric import ReplicationMode, calculate_fabric_params
+from evpn_ninja.calculators.mtu import UnderlayType, calculate_mtu
+from evpn_ninja.calculators.vni import VNIScheme, calculate_vni_allocation
 from evpn_ninja.output import (
-    output_table,
-    output_key_value,
+    OutputFormat,
     output_config,
     output_json,
+    output_key_value,
+    output_table,
     output_yaml,
-    OutputFormat,
 )
-from evpn_ninja.calculators.mtu import calculate_mtu, UnderlayType
-from evpn_ninja.calculators.vni import calculate_vni_allocation, VNIScheme
-from evpn_ninja.calculators.fabric import calculate_fabric_params, ReplicationMode
-from evpn_ninja.calculators.evpn import calculate_evpn_params, Vendor
 
 console = Console()
 
@@ -330,8 +330,11 @@ def _interactive_evpn() -> None:
 
     vendors_choice = questionary.checkbox(
         "Generate configs for:",
-        choices=["Arista EOS", "Cisco NX-OS", "Juniper Junos"],
-        default=["Arista EOS", "Cisco NX-OS", "Juniper Junos"],
+        choices=[
+            questionary.Choice("Arista EOS", checked=True),
+            questionary.Choice("Cisco NX-OS", checked=True),
+            questionary.Choice("Juniper Junos", checked=True),
+        ],
     ).ask()
 
     vendor_map = {

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evpn-ninja"
-version = "1.0.0"
+version = "1.0.1"
 description = "EVPN Ninja - VXLAN/EVPN fabric calculator for VNI allocation, fabric planning, EVPN parameters, MTU calculation"
 readme = "README.md"
 license = {text = "MIT"}
@@ -119,6 +119,26 @@ known-first-party = ["evpn_ninja"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ARG", "PLR2004"]
+# Vendor config generators have consistent API signatures (some params unused in specific vendors)
+"src/evpn_ninja/calculators/evpn.py" = ["ARG001"]
+# Complex functions that are clear despite branch/statement count
+"src/evpn_ninja/calculators/bandwidth.py" = ["PLR0912", "PLR0915"]
+"src/evpn_ninja/calculators/ebgp.py" = ["PLR0912"]
+"src/evpn_ninja/calculators/fabric.py" = ["PLR0912", "SIM108"]
+"src/evpn_ninja/calculators/multicast.py" = ["RUF005"]
+"src/evpn_ninja/calculators/multihoming.py" = ["RUF005"]
+"src/evpn_ninja/calculators/route_reflector.py" = ["PLR0912", "SIM108"]
+# ASCII art in docstring for topology visualization
+"src/evpn_ninja/calculators/topology.py" = ["RUF002", "PLR0915"]
+# __all__ is organized by category, not sorted alphabetically
+"src/evpn_ninja/calculators/__init__.py" = ["RUF022"]
+"src/evpn_ninja/exporters/ansible.py" = ["PLR0912"]
+"src/evpn_ninja/exporters/containerlab.py" = ["PLR0912"]
+"src/evpn_ninja/exporters/eve_gns3.py" = ["PLR0912", "PLR0915", "ARG001"]
+# CLI has unavoidable complexity from typer decorators and many options; save args planned for future
+"src/evpn_ninja/cli.py" = ["PLC0415", "PLR0912", "PLR0915", "ARG001"]
+# Global console is the standard pattern for rich console configuration
+"src/evpn_ninja/output.py" = ["PLW0603"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -6,7 +6,6 @@ and multi-homing topology parameters for EVPN deployments.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 
 class MultiHomingMode(str, Enum):
@@ -340,7 +339,7 @@ def _generate_arista_mh_config(
         "! Arista EOS EVPN Multi-homing Configuration",
         "!",
         "! LACP System Configuration",
-        f"lacp system-priority 32768",
+        "lacp system-priority 32768",
         "!",
     ]
 
@@ -349,7 +348,7 @@ def _generate_arista_mh_config(
             f"! Ethernet Segment: {es.name}",
             f"interface {es.peers[0].interface if es.peers else 'Port-Channel1'}",
             f"   description {es.name}",
-            f"   evpn ethernet-segment",
+            "   evpn ethernet-segment",
             f"      identifier {es.esi_config.esi.replace(':', ' ')}",
         ])
 

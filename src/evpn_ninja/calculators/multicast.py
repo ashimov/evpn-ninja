@@ -104,7 +104,6 @@ def calculate_multicast_groups(
 
     elif scheme == MulticastScheme.SHARED:
         # Multiple VNIs share groups
-        current_group_idx = 0
         for i in range(vni_count):
             vni = vni_start + i
             group_idx = i // vnis_per_group
@@ -135,9 +134,7 @@ def calculate_multicast_groups(
     # PIM configuration
     pim_config = None
     if rp_address:
-        # Calculate group range
-        last_group = _calculate_multicast_group(base_group, groups_used - 1)
-        group_range = f"{base_group}/24"  # Simplified, could be more precise
+        group_range = f"{base_group}/24"  # Simplified group range
 
         pim_config = MulticastPIMConfig(
             rp_address=rp_address,

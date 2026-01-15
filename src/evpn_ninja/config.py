@@ -42,15 +42,47 @@ presets:
 ```
 """
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-import sys
+from typing import Any, TypeVar
 
 import yaml
 
-
 DEFAULT_CONFIG_PATH = Path.home() / ".evpn-ninja.yaml"
+
+# TypeVar for generic dataclass creation
+_T = TypeVar("_T")
+
+
+class ConfigValidationError(ValueError):
+    """Error raised when config validation fails."""
+
+    pass
+
+
+def _validate_positive(value: int, name: str) -> None:
+    """Validate that value is positive."""
+    if value <= 0:
+        raise ConfigValidationError(f"{name} must be positive, got {value}")
+
+
+def _validate_non_negative(value: int, name: str) -> None:
+    """Validate that value is non-negative."""
+    if value < 0:
+        raise ConfigValidationError(f"{name} must be non-negative, got {value}")
+
+
+def _validate_range(value: int, name: str, min_val: int, max_val: int) -> None:
+    """Validate that value is within range."""
+    if not min_val <= value <= max_val:
+        raise ConfigValidationError(f"{name} must be between {min_val} and {max_val}, got {value}")
+
+
+def _validate_choice(value: str, name: str, choices: list[str]) -> None:
+    """Validate that value is one of the allowed choices."""
+    if value not in choices:
+        raise ConfigValidationError(f"{name} must be one of {choices}, got {value}")
 
 
 @dataclass
@@ -62,6 +94,13 @@ class MTUDefaults:
     outer_vlan_tags: int = 0
     inner_vlan_tags: int = 0
 
+    def __post_init__(self) -> None:
+        """Validate MTU defaults."""
+        _validate_positive(self.payload_size, "payload_size")
+        _validate_choice(self.underlay_type, "underlay_type", ["ipv4", "ipv6"])
+        _validate_range(self.outer_vlan_tags, "outer_vlan_tags", 0, 2)
+        _validate_range(self.inner_vlan_tags, "inner_vlan_tags", 0, 2)
+
 
 @dataclass
 class VNIDefaults:
@@ -72,6 +111,14 @@ class VNIDefaults:
     start_vlan: int = 10
     count: int = 10
     multicast_base: str = "239.1.1.0"
+
+    def __post_init__(self) -> None:
+        """Validate VNI defaults."""
+        _validate_positive(self.base_vni, "base_vni")
+        _validate_range(self.base_vni, "base_vni", 1, 16777215)
+        _validate_choice(self.scheme, "scheme", ["vlan-based", "tenant-based", "flat", "hierarchical"])
+        _validate_range(self.start_vlan, "start_vlan", 1, 4094)
+        _validate_positive(self.count, "count")
 
 
 @dataclass
@@ -87,6 +134,14 @@ class FabricDefaults:
     vtep_loopback_network: str = "10.0.1.0/24"
     p2p_network: str = "10.0.100.0/22"
 
+    def __post_init__(self) -> None:
+        """Validate Fabric defaults."""
+        _validate_positive(self.vtep_count, "vtep_count")
+        _validate_positive(self.spine_count, "spine_count")
+        _validate_positive(self.vni_count, "vni_count")
+        _validate_non_negative(self.hosts_per_vtep, "hosts_per_vtep")
+        _validate_choice(self.replication_mode, "replication_mode", ["ingress", "multicast"])
+
 
 @dataclass
 class EVPNDefaults:
@@ -95,6 +150,11 @@ class EVPNDefaults:
     bgp_as: int = 65000
     loopback_ip: str = "10.0.0.1"
     vendors: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Validate EVPN defaults."""
+        _validate_positive(self.bgp_as, "bgp_as")
+        _validate_range(self.bgp_as, "bgp_as", 1, 4294967295)
 
 
 @dataclass
@@ -107,6 +167,12 @@ class EBGPDefaults:
     spine_asn_same: bool = True
     p2p_network: str = "10.0.100.0/22"
 
+    def __post_init__(self) -> None:
+        """Validate eBGP defaults."""
+        _validate_positive(self.spine_count, "spine_count")
+        _validate_positive(self.leaf_count, "leaf_count")
+        _validate_choice(self.scheme, "scheme", ["private-2byte", "private-4byte", "public", "custom"])
+
 
 @dataclass
 class MulticastDefaults:
@@ -118,6 +184,13 @@ class MulticastDefaults:
     base_group: str = "239.1.1.0"
     vnis_per_group: int = 10
 
+    def __post_init__(self) -> None:
+        """Validate Multicast defaults."""
+        _validate_positive(self.vni_start, "vni_start")
+        _validate_positive(self.vni_count, "vni_count")
+        _validate_choice(self.scheme, "scheme", ["one-to-one", "shared", "range"])
+        _validate_positive(self.vnis_per_group, "vnis_per_group")
+
 
 @dataclass
 class OutputSettings:
@@ -126,6 +199,10 @@ class OutputSettings:
     format: str = "table"
     no_color: bool = False
     verbose: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate output settings."""
+        _validate_choice(self.format, "format", ["table", "json", "yaml"])
 
 
 @dataclass
@@ -156,26 +233,35 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Config":
-        """Create Config from dictionary."""
+        """Create Config from dictionary with type validation."""
         config = cls()
 
         defaults = data.get("defaults", {})
 
-        if "mtu" in defaults:
-            config.mtu = MTUDefaults(**defaults["mtu"])
-        if "vni" in defaults:
-            config.vni = VNIDefaults(**defaults["vni"])
-        if "fabric" in defaults:
-            config.fabric = FabricDefaults(**defaults["fabric"])
-        if "evpn" in defaults:
-            config.evpn = EVPNDefaults(**defaults["evpn"])
-        if "ebgp" in defaults:
-            config.ebgp = EBGPDefaults(**defaults["ebgp"])
-        if "multicast" in defaults:
-            config.multicast = MulticastDefaults(**defaults["multicast"])
+        # Helper to safely create dataclass with type validation
+        def safe_create(dataclass_type: type[_T], section_data: dict[str, Any], section_name: str) -> _T:
+            try:
+                return dataclass_type(**section_data)
+            except (TypeError, ConfigValidationError) as e:
+                print(f"Warning: Invalid configuration in '{section_name}': {e}", file=sys.stderr)
+                print(f"Using default values for '{section_name}'.", file=sys.stderr)
+                return dataclass_type()
 
-        if "output" in data:
-            config.output = OutputSettings(**data["output"])
+        if "mtu" in defaults and isinstance(defaults["mtu"], dict):
+            config.mtu = safe_create(MTUDefaults, defaults["mtu"], "defaults.mtu")
+        if "vni" in defaults and isinstance(defaults["vni"], dict):
+            config.vni = safe_create(VNIDefaults, defaults["vni"], "defaults.vni")
+        if "fabric" in defaults and isinstance(defaults["fabric"], dict):
+            config.fabric = safe_create(FabricDefaults, defaults["fabric"], "defaults.fabric")
+        if "evpn" in defaults and isinstance(defaults["evpn"], dict):
+            config.evpn = safe_create(EVPNDefaults, defaults["evpn"], "defaults.evpn")
+        if "ebgp" in defaults and isinstance(defaults["ebgp"], dict):
+            config.ebgp = safe_create(EBGPDefaults, defaults["ebgp"], "defaults.ebgp")
+        if "multicast" in defaults and isinstance(defaults["multicast"], dict):
+            config.multicast = safe_create(MulticastDefaults, defaults["multicast"], "defaults.multicast")
+
+        if "output" in data and isinstance(data["output"], dict):
+            config.output = safe_create(OutputSettings, data["output"], "output")
 
         if "presets" in data:
             for name, preset_data in data["presets"].items():
@@ -197,7 +283,7 @@ def load_config(path: Path | None = None) -> Config:
     Load configuration from file.
 
     Args:
-        path: Path to config file. If None, uses ~/.vxlan.yaml
+        path: Path to config file. If None, uses ~/.evpn-ninja.yaml
 
     Returns:
         Config object with loaded settings
@@ -208,7 +294,7 @@ def load_config(path: Path | None = None) -> Config:
         return Config()
 
     try:
-        with open(config_path) as f:
+        with config_path.open() as f:
             data = yaml.safe_load(f) or {}
         return Config.from_dict(data)
     except yaml.YAMLError as e:
@@ -227,7 +313,7 @@ def save_config(config: Config, path: Path | None = None) -> None:
 
     Args:
         config: Config object to save
-        path: Path to save to. If None, uses ~/.vxlan.yaml
+        path: Path to save to. If None, uses ~/.evpn-ninja.yaml
     """
     config_path = path or DEFAULT_CONFIG_PATH
 
@@ -296,7 +382,7 @@ def save_config(config: Config, path: Path | None = None) -> None:
             }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, "w") as f:
+    with config_path.open("w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
@@ -317,7 +403,7 @@ def load_params_from_file(path: Path) -> dict[str, Any]:
         FileNotFoundError: If file doesn't exist
         yaml.YAMLError: If file is not valid YAML
     """
-    with open(path) as f:
+    with path.open() as f:
         return yaml.safe_load(f) or {}
 
 

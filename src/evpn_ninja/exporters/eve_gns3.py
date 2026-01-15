@@ -5,8 +5,7 @@ Generates lab topology files for EVE-NG and GNS3 network simulators.
 
 import json
 import uuid
-from typing import Any
-
+from typing import Any, cast
 
 # EVE-NG node templates for different platforms
 EVE_TEMPLATES = {
@@ -68,7 +67,6 @@ def export_eve_ng_topology(
     # Calculate grid layout
     total_spines = len(spines)
     total_leaves = len(leaves)
-    total_hosts = len(leaves) if include_hosts else 0
 
     # Start X/Y positions
     spine_y = 100
@@ -90,12 +88,11 @@ def export_eve_ng_topology(
     for i, spine in enumerate(spines):
         name = spine.get("name", f"spine-{i + 1}")
         x = start_x + (i * x_spacing) + ((total_leaves - total_spines) * x_spacing // 2)
-        loopback = spine.get("loopback", spine.get("ip", f"10.0.0.{i + 1}"))
 
         lines.extend([
             f'    <node id="{node_id}" name="{name}" type="qemu" template="{template}"',
             f'          left="{x}" top="{spine_y}" console="telnet" delay="0">',
-            f'      <interface id="0" name="Mgmt" type="ethernet"/>',
+            '      <interface id="0" name="Mgmt" type="ethernet"/>',
         ])
 
         # Add interfaces for leaf connections
@@ -113,12 +110,11 @@ def export_eve_ng_topology(
     for i, leaf in enumerate(leaves):
         name = leaf.get("name", f"leaf-{i + 1}")
         x = start_x + (i * x_spacing)
-        loopback = leaf.get("loopback", leaf.get("ip", f"10.0.0.{total_spines + i + 1}"))
 
         lines.extend([
             f'    <node id="{node_id}" name="{name}" type="qemu" template="{template}"',
             f'          left="{x}" top="{leaf_y}" console="telnet" delay="0">',
-            f'      <interface id="0" name="Mgmt" type="ethernet"/>',
+            '      <interface id="0" name="Mgmt" type="ethernet"/>',
         ])
 
         # Add interfaces for spine connections
@@ -138,7 +134,7 @@ def export_eve_ng_topology(
 
     # Add host nodes
     if include_hosts:
-        for i, leaf in enumerate(leaves):
+        for i, _leaf in enumerate(leaves):
             host_name = f"host-{i + 1}"
             x = start_x + (i * x_spacing)
 
@@ -252,8 +248,9 @@ def export_gns3_topology(
         "version": "2.2.0",
     }
 
-    nodes = project["topology"]["nodes"]
-    links = project["topology"]["links"]
+    topology = cast("dict[str, Any]", project["topology"])
+    nodes = cast("list[dict[str, Any]]", topology["nodes"])
+    links = cast("list[dict[str, Any]]", topology["links"])
     node_ids = {}
 
     # Add spine nodes
@@ -339,7 +336,7 @@ def export_gns3_topology(
 
     # Add host nodes
     if include_hosts:
-        for i, leaf in enumerate(leaves):
+        for i, _leaf in enumerate(leaves):
             host_name = f"host-{i + 1}"
             x = start_x + (i * x_spacing)
             node_id = str(uuid.uuid4())

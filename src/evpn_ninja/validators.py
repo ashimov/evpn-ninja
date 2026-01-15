@@ -239,11 +239,10 @@ def validate_asn(
     ]
 
     for start, end, desc in reserved_ranges:
-        if start <= value <= end:
-            if not allow_reserved:
-                raise ValidationError(
-                    field_name, str(value), f"ASN {value} is {desc}"
-                )
+        if start <= value <= end and not allow_reserved:
+            raise ValidationError(
+                field_name, str(value), f"ASN {value} is {desc}"
+            )
 
     is_private = False
     for start, end, _ in private_ranges:

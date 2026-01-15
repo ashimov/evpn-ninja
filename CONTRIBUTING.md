@@ -1,14 +1,14 @@
-# Contributing to VXLAN Calculator
+# Contributing to EVPN Ninja
 
-Thank you for your interest in contributing to VXLAN Calculator!
+Thank you for your interest in contributing to EVPN Ninja!
 
 ## Development Setup
 
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/ashimov/vxlan-calculator.git
-   cd vxlan-calculator
+   git clone https://github.com/ashimov/evpn-ninja.git
+   cd evpn-ninja
    ```
 
 2. **Create a virtual environment**

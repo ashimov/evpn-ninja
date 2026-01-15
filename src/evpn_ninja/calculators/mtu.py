@@ -81,7 +81,7 @@ def calculate_mtu(
 
     # Outer Ethernet
     outer_eth_size = ETHERNET_HEADER + (outer_vlan_tags * VLAN_TAG)
-    outer_eth_desc = f"Dst MAC + Src MAC + EtherType"
+    outer_eth_desc = "Dst MAC + Src MAC + EtherType"
     if outer_vlan_tags > 0:
         outer_eth_desc += f" + {outer_vlan_tags} VLAN tag(s)"
     layers.append(LayerOverhead("Outer Ethernet", outer_eth_size, outer_eth_desc))

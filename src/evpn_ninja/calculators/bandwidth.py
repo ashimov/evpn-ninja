@@ -126,7 +126,7 @@ def calculate_bandwidth(
     uplink_count_per_leaf: int = 2,
     downlink_speed: LinkSpeed = LinkSpeed.GE_25,
     downlink_count_per_leaf: int = 48,
-    host_utilization_percent: float = 50.0,
+    _host_utilization_percent: float = 50.0,
 ) -> BandwidthResult:
     """
     Calculate fabric bandwidth and oversubscription.
@@ -182,9 +182,6 @@ def calculate_bandwidth(
     # ECMP analysis
     ecmp_paths = min(uplink_count_per_leaf, spine_count)
     hash_efficiency = _calculate_hash_efficiency(ecmp_paths)
-
-    # Effective bandwidth considering hash efficiency
-    effective_uplink_bw = leaf_uplink_bw * hash_efficiency
 
     # Failure scenarios
     failure_scenarios: list[FailureScenario] = []
