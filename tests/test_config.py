@@ -1,5 +1,6 @@
 """Tests for config module."""
 
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -451,6 +452,7 @@ class TestBuiltinPresets:
 class TestConfigReadError:
     """Tests for config file read errors."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod doesn't work on Windows")
     def test_permission_denied(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Test handling of permission denied error."""
         config_path = tmp_path / "config.yaml"
