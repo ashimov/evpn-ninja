@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/evpn-ninja/"><img src="https://img.shields.io/pypi/v/evpn-ninja?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"></a>
-  <a href="https://pepy.tech/project/evpn-ninja"><img src="https://img.shields.io/pepy/dt/evpn-ninja?style=for-the-badge&logo=python&logoColor=white&label=downloads" alt="PyPI Downloads"></a>
+  <a href="https://pypistats.org/packages/evpn-ninja"><img src="https://img.shields.io/pypi/dm/evpn-ninja?style=for-the-badge&logo=pypi&logoColor=white&label=downloads/month" alt="PyPI Downloads"></a>
   <a href="https://github.com/ashimov/evpn-ninja/releases"><img src="https://img.shields.io/github/downloads/ashimov/evpn-ninja/total?style=for-the-badge&logo=github&label=binary%20downloads" alt="GitHub Downloads"></a>
 </p>
 
