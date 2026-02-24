@@ -7,7 +7,7 @@ name = "evpn-ninja"
 version = "1.0.2"
 description = "EVPN Ninja - VXLAN/EVPN fabric calculator for VNI allocation, fabric planning, EVPN parameters, MTU calculation"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Berik Ashimov", email = "berik@ashimov.com"}
