@@ -1,9 +1,9 @@
 """Tests for exporter modules."""
 
 import json
-import defusedxml.ElementTree as ET
 from typing import Any
 
+import defusedxml.ElementTree as ET
 import pytest
 import yaml
 
