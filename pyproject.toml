@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evpn-ninja"
-version = "1.0.2"
+version = "1.0.3"
 description = "EVPN Ninja - VXLAN/EVPN fabric calculator for VNI allocation, fabric planning, EVPN parameters, MTU calculation"
 readme = "README.md"
 license = "MIT"

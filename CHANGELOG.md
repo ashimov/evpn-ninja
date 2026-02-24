@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-02-24
+
+### Fixed
+
+- Fixed `--version` displaying 1.0.1 instead of actual version (PyPI package metadata was correct)
+- Modernized license field to SPDX expression format (PEP 639)
+- Updated CI/CD: pypi-publish action compatibility, reusable workflow artifact handling
+
 ## [1.0.2] - 2026-02-24
 
 ### Added
@@ -218,7 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mypy strict type checking
 - 340+ unit tests
 
-[Unreleased]: https://github.com/ashimov/evpn-ninja/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/ashimov/evpn-ninja/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/ashimov/evpn-ninja/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/ashimov/evpn-ninja/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/ashimov/evpn-ninja/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ashimov/evpn-ninja/releases/tag/v1.0.0
