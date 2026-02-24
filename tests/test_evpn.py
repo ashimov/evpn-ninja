@@ -1,6 +1,5 @@
 """Tests for EVPN Parameters calculator."""
 
-import pytest
 from evpn_ninja.calculators.evpn import (
     Vendor,
     calculate_evpn_params,

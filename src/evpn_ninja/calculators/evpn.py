@@ -6,6 +6,7 @@ from enum import Enum
 
 class Vendor(str, Enum):
     """Network equipment vendor."""
+
     ARISTA = "arista"
     CISCO_NXOS = "cisco-nxos"
     CISCO_IOSXE = "cisco-iosxe"
@@ -29,6 +30,7 @@ class Vendor(str, Enum):
 @dataclass
 class EVPNParameters:
     """Calculated EVPN parameters."""
+
     route_distinguisher: str
     route_target_import: str
     route_target_export: str
@@ -39,6 +41,7 @@ class EVPNParameters:
 @dataclass
 class VendorConfig:
     """Vendor-specific configuration."""
+
     vendor: str
     config: str
 
@@ -46,6 +49,7 @@ class VendorConfig:
 @dataclass
 class EVPNResult:
     """EVPN calculation result."""
+
     bgp_as: int
     loopback_ip: str
     l2_vni: int
@@ -98,7 +102,7 @@ interface Vxlan1
    vxlan udp-port 4789
    vxlan vlan {vlan_id} vni {l2_vni}"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
    vxlan vrf {vrf_name} vni {l3_vni}"""
 
@@ -148,15 +152,15 @@ vlan {vlan_id}
   vn-segment {l2_vni}
 !"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 ! VRF Configuration
 vrf context {vrf_name}
   vni {l3_vni}
-  rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
+  rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
   address-family ipv4 unicast
-    route-target both {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
-    route-target both {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'} evpn
+    route-target both {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
+    route-target both {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"} evpn
 !"""
 
     config += f"""
@@ -168,7 +172,7 @@ interface nve1
   member vni {l2_vni}
     ingress-replication protocol bgp"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
   member vni {l3_vni} associate-vrf"""
 
@@ -259,7 +263,7 @@ interface Nve1
  source {loopback_ip}
  vni {l2_vni} head-end peer-list protocol bgp"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  vni {l3_vni} associate-vrf"""
 
@@ -385,7 +389,7 @@ iface vni{l2_vni}
     bridge-learning off
     bridge-arp-nd-suppress on"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 
 # L3 VNI for VRF
@@ -416,14 +420,14 @@ router bgp {bgp_as}
   advertise-all-vni
  exit-address-family"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  !
  vrf {vrf_name}
   vni {l3_vni}
-  rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
-  route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}
-  route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
+  rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+  route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}
+  route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
  exit-vrf"""
 
     return config
@@ -454,17 +458,17 @@ l2vpn evpn instance {l2_vni} vlan-based
  route-target import {l2_params.route_target_import}
 !"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 ! VRF Configuration
 vrf definition {vrf_name}
- rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
+ rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
  !
  address-family ipv4
-  route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}
-  route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
-  route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'} evpn
-  route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'} evpn
+  route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}
+  route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
+  route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"} evpn
+  route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"} evpn
  exit-address-family
 !
 ! L3VNI Configuration
@@ -480,7 +484,7 @@ interface nve1
  host-reachability protocol bgp
  member vni {l2_vni} ingress-replication"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  member vni {l3_vni} vrf {vrf_name}"""
 
@@ -622,7 +626,7 @@ router bgp {bgp_as}
   exit-vni
  exit-address-family"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  !
  vrf {vrf_name}
@@ -659,13 +663,13 @@ interface nve 1
  !
 !"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 ! VRF Configuration
 ip vrf {vrf_name}
- rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
- route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
- route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}
+ rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+ route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
+ route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}
 !
 interface nve 1
  member-vni {l3_vni} associate-vrf
@@ -718,13 +722,13 @@ interface vxlan 1
         vlan {vlan_id}
 !"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 ! VRF Configuration
 vrf {vrf_name}
-    rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
-    route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'} evpn
-    route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'} evpn
+    rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+    route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"} evpn
+    route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"} evpn
 !
 interface vxlan 1
     vni {l3_vni}
@@ -790,7 +794,7 @@ configure bgp evpn l2vpn vni {l2_vni} rd {l2_params.route_distinguisher}
 configure bgp evpn l2vpn vni {l2_vni} route-target both add {l2_params.route_target_import}
 #"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 # VRF Configuration
 create vr "{vrf_name}"
@@ -855,7 +859,7 @@ add name=evpn1 vni={l2_vni} rd={l2_params.route_distinguisher} \\
     import.route-targets={l2_params.route_target_import} \\
     export.route-targets={l2_params.route_target_export}"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 
 # VRF Configuration
@@ -863,9 +867,9 @@ add name=evpn1 vni={l2_vni} rd={l2_params.route_distinguisher} \\
 add name={vrf_name}
 
 /routing bgp evpn
-add name=evpn-l3 vni={l3_vni} rd={l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'} \\
-    import.route-targets={l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'} \\
-    export.route-targets={l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}"""
+add name=evpn-l3 vni={l3_vni} rd={l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"} \\
+    import.route-targets={l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"} \\
+    export.route-targets={l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}"""
 
     return config
 
@@ -911,15 +915,15 @@ set protocols bgp address-family l2vpn-evpn vni {l2_vni} rd {l2_params.route_dis
 set protocols bgp address-family l2vpn-evpn vni {l2_vni} route-target import {l2_params.route_target_import}
 set protocols bgp address-family l2vpn-evpn vni {l2_vni} route-target export {l2_params.route_target_export}"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 
 # VRF Configuration
 set vrf name {vrf_name}
 set vrf name {vrf_name} vni {l3_vni}
-set protocols bgp address-family l2vpn-evpn vni {l3_vni} rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
-set protocols bgp address-family l2vpn-evpn vni {l3_vni} route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
-set protocols bgp address-family l2vpn-evpn vni {l3_vni} route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}"""
+set protocols bgp address-family l2vpn-evpn vni {l3_vni} rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+set protocols bgp address-family l2vpn-evpn vni {l3_vni} route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
+set protocols bgp address-family l2vpn-evpn vni {l3_vni} route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}"""
 
     return config
 
@@ -981,7 +985,7 @@ config router bgp
     end
 end"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 
 config vdom
@@ -993,9 +997,9 @@ config router bgp
     set vdom "{vrf_name}"
     config evpn
         set evi {l3_params.evi if l3_params else l3_vni}
-        set rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
-        set import-rt {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'}
-        set export-rt {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'}
+        set rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+        set import-rt {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"}
+        set export-rt {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"}
     end
 end"""
 
@@ -1033,22 +1037,22 @@ interface LoopBack0
 #
 # VXLAN Tunnel Interface
 interface Vsi-interface{l2_vni}
- ip binding vpn-instance {vrf_name if vrf_name else 'default'}
+ ip binding vpn-instance {vrf_name if vrf_name else "default"}
 #
 # NVE Interface
 interface Nve1
  source {loopback_ip}
  vni {l2_vni} head-end peer-list protocol bgp"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  vni {l3_vni} associate-vrf
 #
 # VPN Instance Configuration
 ip vpn-instance {vrf_name}
- route-distinguisher {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
- vpn-target {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'} import-extcommunity evpn
- vpn-target {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'} export-extcommunity evpn
+ route-distinguisher {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+ vpn-target {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"} import-extcommunity evpn
+ vpn-target {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"} export-extcommunity evpn
  vxlan vni {l3_vni}"""
 
     config += f"""
@@ -1096,7 +1100,7 @@ interface nve 1
  source {loopback_ip}
  vni {l2_vni} ingress-replication protocol bgp"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
  vni {l3_vni} associate-vrf"""
 
@@ -1163,14 +1167,14 @@ interface nve 1
    nve vxlan source interface loopback 1
 exit"""
 
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         config += f"""
 
 ## VRF Configuration
 vrf definition {vrf_name}
-   rd {l3_params.route_distinguisher if l3_params else f'{loopback_ip}:{l3_vni}'}
-   route-target import {l3_params.route_target_import if l3_params else f'{bgp_as}:{l3_vni}'} evpn
-   route-target export {l3_params.route_target_export if l3_params else f'{bgp_as}:{l3_vni}'} evpn
+   rd {l3_params.route_distinguisher if l3_params else f"{loopback_ip}:{l3_vni}"}
+   route-target import {l3_params.route_target_import if l3_params else f"{bgp_as}:{l3_vni}"} evpn
+   route-target export {l3_params.route_target_export if l3_params else f"{bgp_as}:{l3_vni}"} evpn
 exit
 
 interface nve 1
@@ -1232,6 +1236,18 @@ def calculate_evpn_params(
     Returns:
         EVPNResult with parameters and configs
     """
+    # Validate inputs
+    if bgp_as < 1 or bgp_as > 4294967295:
+        raise ValueError(f"bgp_as must be 1-4294967295, got {bgp_as}")
+    if l2_vni < 1 or l2_vni > 16777215:
+        raise ValueError(f"l2_vni must be 1-16777215, got {l2_vni}")
+    if vlan_id < 1 or vlan_id > 4094:
+        raise ValueError(f"vlan_id must be 1-4094, got {vlan_id}")
+    if l3_vni is not None and (l3_vni < 1 or l3_vni > 16777215):
+        raise ValueError(f"l3_vni must be 1-16777215, got {l3_vni}")
+    if (l3_vni is None) != (vrf_name is None):
+        raise ValueError("l3_vni and vrf_name must both be provided together or both omitted")
+
     if vendors is None:
         vendors = list(Vendor)  # All vendors by default
 
@@ -1246,7 +1262,7 @@ def calculate_evpn_params(
 
     # Calculate L3 EVPN parameters if provided
     l3_params = None
-    if l3_vni and vrf_name:
+    if l3_vni is not None and vrf_name is not None:
         l3_params = EVPNParameters(
             route_distinguisher=_calculate_rd(loopback_ip, l3_vni),
             route_target_import=_calculate_rt(bgp_as, l3_vni),

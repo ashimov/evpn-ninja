@@ -26,6 +26,7 @@ def configure_console(no_color: bool = False) -> None:
 
 class OutputFormat(str, Enum):
     """Output format options."""
+
     TABLE = "table"
     JSON = "json"
     YAML = "yaml"

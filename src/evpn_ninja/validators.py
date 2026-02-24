@@ -141,9 +141,7 @@ def validate_ipv6_network(
         raise ValidationError(field_name, value, str(e)) from e
 
 
-def validate_network(
-    value: str, field_name: str = "network", strict: bool = False
-) -> IPNetwork:
+def validate_network(value: str, field_name: str = "network", strict: bool = False) -> IPNetwork:
     """
     Validate and parse an IP network (IPv4 or IPv6) in CIDR notation.
 
@@ -164,9 +162,7 @@ def validate_network(
         raise ValidationError(field_name, value, str(e)) from e
 
 
-def validate_multicast_address(
-    value: str, field_name: str = "multicast address"
-) -> IPv4Address:
+def validate_multicast_address(value: str, field_name: str = "multicast address") -> IPv4Address:
     """
     Validate an IPv4 multicast address (224.0.0.0 - 239.255.255.255).
 
@@ -240,9 +236,7 @@ def validate_asn(
 
     for start, end, desc in reserved_ranges:
         if start <= value <= end and not allow_reserved:
-            raise ValidationError(
-                field_name, str(value), f"ASN {value} is {desc}"
-            )
+            raise ValidationError(field_name, str(value), f"ASN {value} is {desc}")
 
     is_private = False
     for start, end, _ in private_ranges:
@@ -251,9 +245,7 @@ def validate_asn(
             break
 
     if is_private and not allow_private:
-        raise ValidationError(
-            field_name, str(value), f"Private ASN {value} not allowed"
-        )
+        raise ValidationError(field_name, str(value), f"Private ASN {value} not allowed")
 
     return value
 
@@ -275,9 +267,7 @@ def validate_vni(value: int, field_name: str = "VNI") -> int:
         ValidationError: If the VNI is invalid
     """
     if value < 1 or value > 16777215:
-        raise ValidationError(
-            field_name, str(value), "VNI must be in range 1-16777215"
-        )
+        raise ValidationError(field_name, str(value), "VNI must be in range 1-16777215")
     return value
 
 
@@ -298,9 +288,7 @@ def validate_vlan_id(value: int, field_name: str = "VLAN ID") -> int:
         ValidationError: If the VLAN ID is invalid
     """
     if value < 1 or value > 4094:
-        raise ValidationError(
-            field_name, str(value), "VLAN ID must be in range 1-4094"
-        )
+        raise ValidationError(field_name, str(value), "VLAN ID must be in range 1-4094")
     return value
 
 
@@ -321,9 +309,7 @@ def validate_port(value: int, field_name: str = "port") -> int:
         ValidationError: If the port is invalid
     """
     if value < 1 or value > 65535:
-        raise ValidationError(
-            field_name, str(value), "Port must be in range 1-65535"
-        )
+        raise ValidationError(field_name, str(value), "Port must be in range 1-65535")
     return value
 
 
@@ -344,9 +330,7 @@ def validate_mtu(value: int, field_name: str = "MTU") -> int:
         ValidationError: If the MTU is invalid
     """
     if value < 68 or value > 65535:
-        raise ValidationError(
-            field_name, str(value), "MTU must be in range 68-65535"
-        )
+        raise ValidationError(field_name, str(value), "MTU must be in range 68-65535")
     return value
 
 
@@ -371,9 +355,7 @@ def validate_positive_int(
         raise ValidationError(field_name, str(value), "Must be a positive integer")
 
     if max_value is not None and value > max_value:
-        raise ValidationError(
-            field_name, str(value), f"Must be at most {max_value}"
-        )
+        raise ValidationError(field_name, str(value), f"Must be at most {max_value}")
 
     return value
 

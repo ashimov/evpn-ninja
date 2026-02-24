@@ -1,7 +1,5 @@
 """Tests for remaining calculator modules (bandwidth, multihoming, route_reflector, topology)."""
 
-import pytest
-
 from evpn_ninja.calculators.bandwidth import (
     BandwidthResult,
     FailureScenario,
@@ -20,9 +18,9 @@ from evpn_ninja.calculators.multihoming import (
     generate_esi_type3,
 )
 from evpn_ninja.calculators.route_reflector import (
+    RouteReflectorResult,
     RRPlacement,
     RRRedundancy,
-    RouteReflectorResult,
     calculate_route_reflector,
 )
 from evpn_ninja.calculators.topology import (
@@ -91,11 +89,11 @@ class TestBandwidthCalculator:
         # Leaf downlink: 48 * 25G = 1200G
         assert result.leaf_downlink_bandwidth_gbps == 1200
 
-        # Spine total: 4 leaves * 100G = 400G
+        # Spine total: 4 leaves * (2/2 uplinks_per_spine) * 100G = 400G
         assert result.spine_total_bandwidth_gbps == 400
 
-        # Bisection: 4 leaves * 200G = 800G
-        assert result.fabric_bisection_bandwidth_gbps == 800
+        # Bisection: (4 leaves * 200G) / 2 = 400G (one direction across fabric cut)
+        assert result.fabric_bisection_bandwidth_gbps == 400
 
     def test_oversubscription_analysis(self) -> None:
         """Test oversubscription ratio calculation."""
@@ -182,8 +180,8 @@ class TestESIGeneration:
 
         assert esi.esi_type == "type-0"
         assert esi.esi.startswith("00:")
-        # ESI format: type(1) + prefix(3) + es_id(5) = 9 bytes
-        assert len(esi.esi.split(":")) == 9
+        # ESI format per RFC 7432: type(1) + prefix(3) + es_id(6) = 10 bytes
+        assert len(esi.esi.split(":")) == 10
 
     def test_generate_esi_type0_with_prefix(self) -> None:
         """Test Type-0 ESI with custom prefix."""

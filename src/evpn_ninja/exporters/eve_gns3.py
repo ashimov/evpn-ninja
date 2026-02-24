@@ -5,6 +5,7 @@ Generates lab topology files for EVE-NG and GNS3 network simulators.
 
 import json
 import uuid
+from html import escape as html_escape
 from typing import Any, cast
 
 # EVE-NG node templates for different platforms
@@ -68,6 +69,21 @@ def export_eve_ng_topology(
     total_spines = len(spines)
     total_leaves = len(leaves)
 
+    # Detect name collisions
+    all_node_names: list[str] = []
+    for i, spine in enumerate(spines):
+        all_node_names.append(spine.get("name", f"spine-{i + 1}"))
+    for i, leaf in enumerate(leaves):
+        all_node_names.append(leaf.get("name", f"leaf-{i + 1}"))
+    if include_hosts:
+        for i in range(total_leaves):
+            all_node_names.append(f"host-{i + 1}")
+    seen: set[str] = set()
+    for name in all_node_names:
+        if name in seen:
+            raise ValueError(f"Node name collision: '{name}'")
+        seen.add(name)
+
     # Start X/Y positions
     spine_y = 100
     leaf_y = 300
@@ -75,47 +91,59 @@ def export_eve_ng_topology(
     start_x = 100
     x_spacing = 200
 
+    safe_lab_name = html_escape(lab_name, quote=True)
+
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        f'<lab name="{lab_name}" id="{uuid.uuid4()}" version="1">',
-        '  <topology>',
+        f'<lab name="{safe_lab_name}" id="{uuid.uuid4()}" version="1">',
+        "  <topology>",
     ]
 
     node_id = 1
     node_ids = {}  # Map node name to ID
 
+    safe_template = html_escape(template, quote=True)
+
     # Add spine nodes
     for i, spine in enumerate(spines):
-        name = spine.get("name", f"spine-{i + 1}")
+        raw_name = spine.get("name", f"spine-{i + 1}")
+        safe_name = html_escape(raw_name, quote=True)
         x = start_x + (i * x_spacing) + ((total_leaves - total_spines) * x_spacing // 2)
 
-        lines.extend([
-            f'    <node id="{node_id}" name="{name}" type="qemu" template="{template}"',
-            f'          left="{x}" top="{spine_y}" console="telnet" delay="0">',
-            '      <interface id="0" name="Mgmt" type="ethernet"/>',
-        ])
+        lines.extend(
+            [
+                f'    <node id="{node_id}" name="{safe_name}" type="qemu" template="{safe_template}"',
+                f'          left="{x}" top="{spine_y}" console="telnet" delay="0">',
+                '      <interface id="0" name="Mgmt" type="ethernet"/>',
+            ]
+        )
 
         # Add interfaces for leaf connections
         for j in range(total_leaves):
             lines.append(f'      <interface id="{j + 1}" name="Eth{j + 1}" type="ethernet"/>')
 
-        lines.extend([
-            '    </node>',
-        ])
+        lines.extend(
+            [
+                "    </node>",
+            ]
+        )
 
-        node_ids[name] = node_id
+        node_ids[raw_name] = node_id
         node_id += 1
 
     # Add leaf nodes
     for i, leaf in enumerate(leaves):
-        name = leaf.get("name", f"leaf-{i + 1}")
+        raw_name = leaf.get("name", f"leaf-{i + 1}")
+        safe_name = html_escape(raw_name, quote=True)
         x = start_x + (i * x_spacing)
 
-        lines.extend([
-            f'    <node id="{node_id}" name="{name}" type="qemu" template="{template}"',
-            f'          left="{x}" top="{leaf_y}" console="telnet" delay="0">',
-            '      <interface id="0" name="Mgmt" type="ethernet"/>',
-        ])
+        lines.extend(
+            [
+                f'    <node id="{node_id}" name="{safe_name}" type="qemu" template="{safe_template}"',
+                f'          left="{x}" top="{leaf_y}" console="telnet" delay="0">',
+                '      <interface id="0" name="Mgmt" type="ethernet"/>',
+            ]
+        )
 
         # Add interfaces for spine connections
         for j in range(total_spines):
@@ -123,13 +151,17 @@ def export_eve_ng_topology(
 
         # Add interface for host if needed
         if include_hosts:
-            lines.append(f'      <interface id="{total_spines + 1}" name="Eth{total_spines + 1}" type="ethernet"/>')
+            lines.append(
+                f'      <interface id="{total_spines + 1}" name="Eth{total_spines + 1}" type="ethernet"/>'
+            )
 
-        lines.extend([
-            '    </node>',
-        ])
+        lines.extend(
+            [
+                "    </node>",
+            ]
+        )
 
-        node_ids[name] = node_id
+        node_ids[raw_name] = node_id
         node_id += 1
 
     # Add host nodes
@@ -138,20 +170,22 @@ def export_eve_ng_topology(
             host_name = f"host-{i + 1}"
             x = start_x + (i * x_spacing)
 
-            lines.extend([
-                f'    <node id="{node_id}" name="{host_name}" type="qemu" template="linux"',
-                f'          left="{x}" top="{host_y}" console="telnet" delay="0">',
-                '      <interface id="0" name="eth0" type="ethernet"/>',
-                '    </node>',
-            ])
+            lines.extend(
+                [
+                    f'    <node id="{node_id}" name="{host_name}" type="qemu" template="linux"',
+                    f'          left="{x}" top="{host_y}" console="telnet" delay="0">',
+                    '      <interface id="0" name="eth0" type="ethernet"/>',
+                    "    </node>",
+                ]
+            )
 
             node_ids[host_name] = node_id
             node_id += 1
 
-    lines.append('  </topology>')
+    lines.append("  </topology>")
 
     # Add networks (connections)
-    lines.append('  <networks>')
+    lines.append("  <networks>")
 
     network_id = 1
 
@@ -164,12 +198,15 @@ def export_eve_ng_topology(
             leaf_name = leaf.get("name", f"leaf-{j + 1}")
             leaf_id = node_ids[leaf_name]
 
-            lines.extend([
-                f'    <network id="{network_id}" name="p2p_{spine_name}_{leaf_name}" type="bridge">',
-                f'      <member node="{spine_id}" interface="{j + 1}"/>',
-                f'      <member node="{leaf_id}" interface="{i + 1}"/>',
-                '    </network>',
-            ])
+            safe_net_name = html_escape(f"p2p_{spine_name}_{leaf_name}", quote=True)
+            lines.extend(
+                [
+                    f'    <network id="{network_id}" name="{safe_net_name}" type="bridge">',
+                    f'      <member node="{spine_id}" interface="{j + 1}"/>',
+                    f'      <member node="{leaf_id}" interface="{i + 1}"/>',
+                    "    </network>",
+                ]
+            )
             network_id += 1
 
     # Host connections
@@ -180,20 +217,25 @@ def export_eve_ng_topology(
             host_name = f"host-{i + 1}"
             host_id = node_ids[host_name]
 
-            lines.extend([
-                f'    <network id="{network_id}" name="host_{leaf_name}" type="bridge">',
-                f'      <member node="{leaf_id}" interface="{total_spines + 1}"/>',
-                f'      <member node="{host_id}" interface="0"/>',
-                '    </network>',
-            ])
+            safe_net_name = html_escape(f"host_{leaf_name}", quote=True)
+            lines.extend(
+                [
+                    f'    <network id="{network_id}" name="{safe_net_name}" type="bridge">',
+                    f'      <member node="{leaf_id}" interface="{total_spines + 1}"/>',
+                    f'      <member node="{host_id}" interface="0"/>',
+                    "    </network>",
+                ]
+            )
             network_id += 1
 
-    lines.extend([
-        '  </networks>',
-        '</lab>',
-    ])
+    lines.extend(
+        [
+            "  </networks>",
+            "</lab>",
+        ]
+    )
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def export_gns3_topology(
@@ -224,6 +266,21 @@ def export_gns3_topology(
     total_spines = len(spines)
     total_leaves = len(leaves)
 
+    # Detect name collisions
+    all_node_names: list[str] = []
+    for i, spine in enumerate(spines):
+        all_node_names.append(spine.get("name", f"spine-{i + 1}"))
+    for i, leaf in enumerate(leaves):
+        all_node_names.append(leaf.get("name", f"leaf-{i + 1}"))
+    if include_hosts:
+        for i in range(total_leaves):
+            all_node_names.append(f"host-{i + 1}")
+    seen: set[str] = set()
+    for name in all_node_names:
+        if name in seen:
+            raise ValueError(f"Node name collision: '{name}'")
+        seen.add(name)
+
     spine_y = -200
     leaf_y = 0
     host_y = 200
@@ -253,6 +310,9 @@ def export_gns3_topology(
     links = cast("list[dict[str, Any]]", topology["links"])
     node_ids = {}
 
+    # Use linear console port counter to avoid collisions
+    console_port = 5000
+
     # Add spine nodes
     for i, spine in enumerate(spines):
         name = spine.get("name", f"spine-{i + 1}")
@@ -261,7 +321,7 @@ def export_gns3_topology(
 
         node = {
             "compute_id": "local",
-            "console": 5000 + i,
+            "console": console_port,
             "console_type": "telnet",
             "name": name,
             "node_id": node_id,
@@ -284,14 +344,17 @@ def export_gns3_topology(
 
         # Add ports
         for j in range(total_leaves + 1):  # +1 for management
-            node["ports"].append({
-                "adapter_number": j,
-                "port_number": 0,
-                "name": f"Ethernet{j}",
-            })
+            node["ports"].append(
+                {
+                    "adapter_number": j,
+                    "port_number": 0,
+                    "name": f"Ethernet{j}",
+                }
+            )
 
         nodes.append(node)
         node_ids[name] = node_id
+        console_port += 1
 
     # Add leaf nodes
     for i, leaf in enumerate(leaves):
@@ -301,7 +364,7 @@ def export_gns3_topology(
 
         node = {
             "compute_id": "local",
-            "console": 5100 + i,
+            "console": console_port,
             "console_type": "telnet",
             "name": name,
             "node_id": node_id,
@@ -322,17 +385,20 @@ def export_gns3_topology(
             "ports": [],
         }
 
-        # Add ports
-        port_count = total_spines + 2  # spines + mgmt + host
+        # Add ports: spines + mgmt, plus host port if hosts included
+        port_count = total_spines + 1 + (1 if include_hosts else 0)
         for j in range(port_count):
-            node["ports"].append({
-                "adapter_number": j,
-                "port_number": 0,
-                "name": f"Ethernet{j}",
-            })
+            node["ports"].append(
+                {
+                    "adapter_number": j,
+                    "port_number": 0,
+                    "name": f"Ethernet{j}",
+                }
+            )
 
         nodes.append(node)
         node_ids[name] = node_id
+        console_port += 1
 
     # Add host nodes
     if include_hosts:
@@ -343,7 +409,7 @@ def export_gns3_topology(
 
             node = {
                 "compute_id": "local",
-                "console": 5200 + i,
+                "console": console_port,
                 "console_type": "telnet",
                 "name": host_name,
                 "node_id": node_id,
@@ -361,15 +427,18 @@ def export_gns3_topology(
                     "x": -20,
                     "y": -25,
                 },
-                "ports": [{
-                    "adapter_number": 0,
-                    "port_number": 0,
-                    "name": "eth0",
-                }],
+                "ports": [
+                    {
+                        "adapter_number": 0,
+                        "port_number": 0,
+                        "name": "eth0",
+                    }
+                ],
             }
 
             nodes.append(node)
             node_ids[host_name] = node_id
+            console_port += 1
 
     # Add links - Spine to Leaf connections
     for i, spine in enumerate(spines):

@@ -81,13 +81,13 @@ def export_ansible_inventory(
     }
 
     # Add fabric-wide vars if iBGP
-    if bgp_as:
+    if bgp_as is not None:
         inventory["all"]["children"]["fabric"]["vars"] = {
             "bgp_as": bgp_as,
         }
 
     # Add spines
-    for spine in spines:
+    for i, spine in enumerate(spines):
         host_vars: dict[str, Any] = {
             "ansible_host": spine.get("ip", spine.get("loopback", "")),
             "role": "spine",
@@ -97,12 +97,13 @@ def export_ansible_inventory(
         if "loopback" in spine:
             host_vars["loopback"] = spine["loopback"]
 
-        inventory["all"]["children"]["fabric"]["children"]["spines"]["hosts"][
-            spine["name"]
-        ] = host_vars
+        spine_name = spine.get("name", f"spine-{i + 1}")
+        inventory["all"]["children"]["fabric"]["children"]["spines"]["hosts"][spine_name] = (
+            host_vars
+        )
 
     # Add leaves
-    for leaf in leaves:
+    for i, leaf in enumerate(leaves):
         host_vars = {
             "ansible_host": leaf.get("ip", leaf.get("loopback", "")),
             "role": "leaf",
@@ -114,9 +115,8 @@ def export_ansible_inventory(
         if "vtep_ip" in leaf:
             host_vars["vtep_ip"] = leaf["vtep_ip"]
 
-        inventory["all"]["children"]["fabric"]["children"]["leaves"]["hosts"][
-            leaf["name"]
-        ] = host_vars
+        leaf_name = leaf.get("name", f"leaf-{i + 1}")
+        inventory["all"]["children"]["fabric"]["children"]["leaves"]["hosts"][leaf_name] = host_vars
 
     # Add extra groups
     if extra_groups:
@@ -124,9 +124,9 @@ def export_ansible_inventory(
             group_data: dict[str, Any] = {"hosts": {}}
             for host in group.hosts:
                 host_data: dict[str, Any] = {"ansible_host": host.ansible_host, "role": host.role}
-                if host.asn:
+                if host.asn is not None:
                     host_data["asn"] = host.asn
-                if host.loopback:
+                if host.loopback is not None:
                     host_data["loopback"] = host.loopback
                 if host.extra_vars:
                     host_data.update(host.extra_vars)
@@ -166,48 +166,66 @@ def export_ansible_vars(
     if vni_allocations:
         vars_data["vxlan_vnis"] = []
         for vni in vni_allocations:
-            vars_data["vxlan_vnis"].append({
+            vni_entry: dict[str, Any] = {
                 "vlan_id": vni.get("vlan_id"),
                 "vni": vni.get("vni_decimal", vni.get("vni")),
                 "name": vni.get("name", f"VLAN{vni.get('vlan_id')}"),
-                "multicast_group": vni.get("multicast_group"),
-            })
+            }
+            if vni.get("multicast_group") is not None:
+                vni_entry["multicast_group"] = vni["multicast_group"]
+            vars_data["vxlan_vnis"].append(vni_entry)
 
     # EVPN parameters
     if evpn_params:
-        vars_data["evpn"] = {
-            "l2_vni": evpn_params.get("l2_vni"),
-            "l2_rd": evpn_params.get("l2_rd"),
-            "l2_rt_import": evpn_params.get("l2_rt_import"),
-            "l2_rt_export": evpn_params.get("l2_rt_export"),
-        }
-        if evpn_params.get("l3_vni"):
-            vars_data["evpn"]["l3_vni"] = evpn_params.get("l3_vni")
-            vars_data["evpn"]["l3_rd"] = evpn_params.get("l3_rd")
-            vars_data["evpn"]["l3_rt_import"] = evpn_params.get("l3_rt_import")
-            vars_data["evpn"]["l3_rt_export"] = evpn_params.get("l3_rt_export")
-            vars_data["evpn"]["vrf"] = evpn_params.get("vrf_name")
+        evpn_data: dict[str, Any] = {}
+        for key in ("l2_vni", "l2_rd", "l2_rt_import", "l2_rt_export"):
+            val = evpn_params.get(key)
+            if val is not None:
+                evpn_data[key] = val
+        vars_data["evpn"] = evpn_data
+        if evpn_params.get("l3_vni") is not None:
+            vars_data["evpn"]["l3_vni"] = evpn_params["l3_vni"]
+            for l3_key in ("l3_rd", "l3_rt_import", "l3_rt_export"):
+                val = evpn_params.get(l3_key)
+                if val is not None:
+                    vars_data["evpn"][l3_key] = val
+            if evpn_params.get("vrf_name") is not None:
+                vars_data["evpn"]["vrf"] = evpn_params["vrf_name"]
 
     # Fabric parameters
     if fabric_params:
-        vars_data["fabric"] = {
-            "spine_count": fabric_params.get("spine_count"),
-            "leaf_count": fabric_params.get("leaf_count", fabric_params.get("vtep_count")),
-            "replication_mode": fabric_params.get("replication_mode"),
-            "loopback_network": fabric_params.get("loopback_network"),
-            "vtep_network": fabric_params.get("vtep_loopback_network"),
-            "p2p_network": fabric_params.get("p2p_network"),
+        fabric_mapping: dict[str, str | tuple[str, ...]] = {
+            "spine_count": "spine_count",
+            "leaf_count": ("leaf_count", "vtep_count"),
+            "replication_mode": "replication_mode",
+            "loopback_network": "loopback_network",
+            "vtep_network": "vtep_loopback_network",
+            "p2p_network": "p2p_network",
         }
+        fabric_data: dict[str, Any] = {}
+        for out_key, src_key in fabric_mapping.items():
+            if isinstance(src_key, tuple):
+                val = next(
+                    (fabric_params.get(k) for k in src_key if fabric_params.get(k) is not None),
+                    None,
+                )
+            else:
+                val = fabric_params.get(src_key)
+            if val is not None:
+                fabric_data[out_key] = val
+        vars_data["fabric"] = fabric_data
 
     # BGP sessions
     if bgp_sessions:
         vars_data["bgp_neighbors"] = []
         for session in bgp_sessions:
-            vars_data["bgp_neighbors"].append({
-                "peer_ip": session.get("peer_ip", session.get("device_b_ip")),
-                "peer_as": session.get("peer_as", session.get("device_b_asn")),
-                "description": session.get("description", session.get("device_b")),
-            })
+            vars_data["bgp_neighbors"].append(
+                {
+                    "peer_ip": session.get("peer_ip", session.get("device_b_ip")),
+                    "peer_as": session.get("peer_as", session.get("device_b_asn")),
+                    "description": session.get("description", session.get("device_b")),
+                }
+            )
 
     return yaml.dump(vars_data, default_flow_style=False, sort_keys=False)
 

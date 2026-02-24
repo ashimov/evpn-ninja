@@ -1,17 +1,15 @@
 """Tests for MTU calculator."""
 
-import pytest
 from evpn_ninja.calculators.mtu import (
-    UnderlayType,
-    calculate_mtu,
-    VXLAN_HEADER,
-    UDP_HEADER,
+    ETHERNET_HEADER,
     IPV4_HEADER,
     IPV6_HEADER,
-    ETHERNET_HEADER,
+    UDP_HEADER,
     VLAN_TAG,
+    VXLAN_HEADER,
+    UnderlayType,
+    calculate_mtu,
 )
-
 
 # Total VXLAN overhead for IPv4: Outer Eth (14) + IPv4 (20) + UDP (8) + VXLAN (8) + Inner Eth (14)
 VXLAN_OVERHEAD_IPV4 = IPV4_HEADER + UDP_HEADER + VXLAN_HEADER + ETHERNET_HEADER

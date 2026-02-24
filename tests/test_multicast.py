@@ -1,6 +1,5 @@
 """Tests for Multicast Groups calculator."""
 
-import pytest
 from evpn_ninja.calculators.multicast import (
     MulticastScheme,
     calculate_multicast_groups,

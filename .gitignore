@@ -97,9 +97,12 @@ Desktop.ini
 *.log
 *.bak
 
-# Pre-commit (removed from project)
-.pre-commit-config.yaml
+# Pre-commit
+# .pre-commit-config.yaml is tracked in the repo
 
 # Local development
 *.local
 .envrc
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md

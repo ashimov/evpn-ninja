@@ -7,14 +7,16 @@ from ipaddress import IPv4Network
 
 class ASNScheme(str, Enum):
     """ASN allocation scheme."""
-    PRIVATE_2BYTE = "private-2byte"    # 64512-65534
-    PRIVATE_4BYTE = "private-4byte"    # 4200000000-4294967294
-    CUSTOM = "custom"                   # User-defined base
+
+    PRIVATE_2BYTE = "private-2byte"  # 64512-65534
+    PRIVATE_4BYTE = "private-4byte"  # 4200000000-4294967294
+    CUSTOM = "custom"  # User-defined base
 
 
 @dataclass
 class DeviceASN:
     """ASN assignment for a device."""
+
     device_name: str
     device_role: str  # spine or leaf
     asn: int
@@ -23,6 +25,7 @@ class DeviceASN:
 @dataclass
 class BGPSession:
     """BGP session between two devices."""
+
     device_a: str
     device_a_ip: str
     device_a_asn: int
@@ -34,6 +37,7 @@ class BGPSession:
 @dataclass
 class EBGPUnderlayResult:
     """eBGP underlay calculation result."""
+
     scheme: str
     spine_count: int
     leaf_count: int
@@ -80,13 +84,18 @@ def calculate_ebgp_underlay(
     Returns:
         EBGPUnderlayResult with ASN assignments and BGP sessions
     """
+    if spine_count <= 0:
+        raise ValueError(f"spine_count must be positive, got {spine_count}")
+    if leaf_count <= 0:
+        raise ValueError(f"leaf_count must be positive, got {leaf_count}")
+
     # Determine base ASN
     if scheme == ASNScheme.PRIVATE_2BYTE:
-        start_asn = base_asn if base_asn else PRIVATE_2BYTE_START
+        start_asn = base_asn if base_asn is not None else PRIVATE_2BYTE_START
     elif scheme == ASNScheme.PRIVATE_4BYTE:
-        start_asn = base_asn if base_asn else PRIVATE_4BYTE_START
+        start_asn = base_asn if base_asn is not None else PRIVATE_4BYTE_START
     else:
-        start_asn = base_asn if base_asn else 65000
+        start_asn = base_asn if base_asn is not None else 65000
 
     asn_assignments: list[DeviceASN] = []
     current_asn = start_asn
@@ -97,21 +106,25 @@ def calculate_ebgp_underlay(
         # All spines share the same ASN
         spine_asn = current_asn
         for i in range(spine_count):
-            asn_assignments.append(DeviceASN(
-                device_name=f"spine-{i + 1}",
-                device_role="spine",
-                asn=spine_asn,
-            ))
+            asn_assignments.append(
+                DeviceASN(
+                    device_name=f"spine-{i + 1}",
+                    device_role="spine",
+                    asn=spine_asn,
+                )
+            )
             spine_asns.append(spine_asn)
         current_asn += 1
     else:
         # Each spine has unique ASN
         for i in range(spine_count):
-            asn_assignments.append(DeviceASN(
-                device_name=f"spine-{i + 1}",
-                device_role="spine",
-                asn=current_asn,
-            ))
+            asn_assignments.append(
+                DeviceASN(
+                    device_name=f"spine-{i + 1}",
+                    device_role="spine",
+                    asn=current_asn,
+                )
+            )
             spine_asns.append(current_asn)
             current_asn += 1
 
@@ -119,11 +132,13 @@ def calculate_ebgp_underlay(
     leaf_asns: list[int] = []
     leaf_start_asn = current_asn
     for i in range(leaf_count):
-        asn_assignments.append(DeviceASN(
-            device_name=f"leaf-{i + 1}",
-            device_role="leaf",
-            asn=current_asn,
-        ))
+        asn_assignments.append(
+            DeviceASN(
+                device_name=f"leaf-{i + 1}",
+                device_role="leaf",
+                asn=current_asn,
+            )
+        )
         leaf_asns.append(current_asn)
         current_asn += 1
 
@@ -132,21 +147,31 @@ def calculate_ebgp_underlay(
     p2p_net = IPv4Network(p2p_network)
     p2p_subnets = list(p2p_net.subnets(new_prefix=31))
 
+    required_subnets = leaf_count * spine_count
+    if len(p2p_subnets) < required_subnets:
+        raise ValueError(
+            f"P2P network {p2p_network!r} provides only {len(p2p_subnets)} /31 subnets "
+            f"but {required_subnets} are required ({leaf_count} leaves x {spine_count} spines)"
+        )
+
     link_idx = 0
     for leaf_idx in range(leaf_count):
         for spine_idx in range(spine_count):
             if link_idx < len(p2p_subnets):
                 subnet = p2p_subnets[link_idx]
-                hosts = list(subnet.hosts())
-                if len(hosts) >= 2:
-                    bgp_sessions.append(BGPSession(
-                        device_a=f"leaf-{leaf_idx + 1}",
-                        device_a_ip=str(hosts[0]),
-                        device_a_asn=leaf_asns[leaf_idx],
-                        device_b=f"spine-{spine_idx + 1}",
-                        device_b_ip=str(hosts[1]),
-                        device_b_asn=spine_asns[spine_idx],
-                    ))
+                # Use list(subnet) instead of subnet.hosts() for /31 support (RFC 3021)
+                addrs = list(subnet)
+                if len(addrs) >= 2:
+                    bgp_sessions.append(
+                        BGPSession(
+                            device_a=f"leaf-{leaf_idx + 1}",
+                            device_a_ip=str(addrs[0]),
+                            device_a_asn=leaf_asns[leaf_idx],
+                            device_b=f"spine-{spine_idx + 1}",
+                            device_b_ip=str(addrs[1]),
+                            device_b_asn=spine_asns[spine_idx],
+                        )
+                    )
             link_idx += 1
 
     # Calculate ranges for display

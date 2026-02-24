@@ -2,19 +2,22 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from ipaddress import IPv4Address
+
+from evpn_ninja.calculators._multicast_utils import calculate_multicast_group
 
 
 class MulticastScheme(str, Enum):
     """Multicast group allocation scheme."""
-    ONE_TO_ONE = "one-to-one"      # One multicast group per VNI
-    SHARED = "shared"              # Shared groups for multiple VNIs
-    RANGE_BASED = "range-based"    # VNI ranges map to groups
+
+    ONE_TO_ONE = "one-to-one"  # One multicast group per VNI
+    SHARED = "shared"  # Shared groups for multiple VNIs
+    RANGE_BASED = "range-based"  # VNI ranges map to groups
 
 
 @dataclass
 class MulticastMapping:
     """VNI to multicast group mapping."""
+
     vni: int
     multicast_group: str
     vni_range_start: int | None = None
@@ -24,6 +27,7 @@ class MulticastMapping:
 @dataclass
 class MulticastPIMConfig:
     """PIM configuration for multicast underlay."""
+
     rp_address: str
     rp_group_range: str
     anycast_rp: bool
@@ -33,6 +37,7 @@ class MulticastPIMConfig:
 @dataclass
 class MulticastResult:
     """Multicast calculation result."""
+
     scheme: str
     base_group: str
     vni_start: int
@@ -41,20 +46,6 @@ class MulticastResult:
     mappings: list[MulticastMapping]
     pim_config: MulticastPIMConfig | None
     underlay_requirements: dict[str, str]
-
-
-def _calculate_multicast_group(base: str, offset: int) -> str:
-    """Calculate multicast group address with offset."""
-    base_ip = IPv4Address(base)
-    base_int = int(base_ip)
-    new_int = base_int + offset
-
-    # Ensure we stay in valid multicast range (224.0.0.0 - 239.255.255.255)
-    if new_int > int(IPv4Address("239.255.255.255")):
-        # Wrap around within the range
-        new_int = int(IPv4Address("239.0.0.0")) + (new_int - int(IPv4Address("239.255.255.255")))
-
-    return str(IPv4Address(new_int))
 
 
 def calculate_multicast_groups(
@@ -88,48 +79,64 @@ def calculate_multicast_groups(
     Returns:
         MulticastResult with mappings and configuration
     """
+    if vni_count <= 0:
+        raise ValueError(f"vni_count must be positive, got {vni_count}")
+    if vni_start < 1 or vni_start > 16777215:
+        raise ValueError(f"vni_start must be 1-16777215, got {vni_start}")
+    if vni_start + vni_count - 1 > 16777215:
+        raise ValueError(
+            f"vni_start ({vni_start}) + vni_count ({vni_count}) - 1 = {vni_start + vni_count - 1} "
+            f"exceeds maximum VNI 16777215"
+        )
+
     mappings: list[MulticastMapping] = []
-    groups_used = 0
+
+    if vnis_per_group <= 0:
+        raise ValueError(f"vnis_per_group must be positive, got {vnis_per_group}")
 
     if scheme == MulticastScheme.ONE_TO_ONE:
-        # Each VNI gets unique multicast group
+        groups_used = vni_count
         for i in range(vni_count):
             vni = vni_start + i
-            mcast_group = _calculate_multicast_group(base_group, i)
-            mappings.append(MulticastMapping(
-                vni=vni,
-                multicast_group=mcast_group,
-            ))
-            groups_used += 1
+            mcast_group = calculate_multicast_group(base_group, i)
+            mappings.append(
+                MulticastMapping(
+                    vni=vni,
+                    multicast_group=mcast_group,
+                )
+            )
 
     elif scheme == MulticastScheme.SHARED:
-        # Multiple VNIs share groups
+        groups_used = (vni_count + vnis_per_group - 1) // vnis_per_group
         for i in range(vni_count):
             vni = vni_start + i
             group_idx = i // vnis_per_group
-            mcast_group = _calculate_multicast_group(base_group, group_idx)
-            mappings.append(MulticastMapping(
-                vni=vni,
-                multicast_group=mcast_group,
-            ))
-            if group_idx >= groups_used:
-                groups_used = group_idx + 1
-
-    elif scheme == MulticastScheme.RANGE_BASED:
-        # VNI ranges map to groups
-        for group_idx in range((vni_count + vnis_per_group - 1) // vnis_per_group):
-            range_start = vni_start + (group_idx * vnis_per_group)
-            range_end = min(range_start + vnis_per_group - 1, vni_start + vni_count - 1)
-            mcast_group = _calculate_multicast_group(base_group, group_idx)
-
-            for vni in range(range_start, range_end + 1):
-                mappings.append(MulticastMapping(
+            mcast_group = calculate_multicast_group(base_group, group_idx)
+            mappings.append(
+                MulticastMapping(
                     vni=vni,
                     multicast_group=mcast_group,
-                    vni_range_start=range_start,
-                    vni_range_end=range_end,
-                ))
-            groups_used += 1
+                )
+            )
+
+    elif scheme == MulticastScheme.RANGE_BASED:
+        groups_used = (vni_count + vnis_per_group - 1) // vnis_per_group
+        for group_idx in range(groups_used):
+            range_start = vni_start + (group_idx * vnis_per_group)
+            range_end = min(range_start + vnis_per_group - 1, vni_start + vni_count - 1)
+            mcast_group = calculate_multicast_group(base_group, group_idx)
+
+            for vni in range(range_start, range_end + 1):
+                mappings.append(
+                    MulticastMapping(
+                        vni=vni,
+                        multicast_group=mcast_group,
+                        vni_range_start=range_start,
+                        vni_range_end=range_end,
+                    )
+                )
+    else:
+        groups_used = 0
 
     # PIM configuration
     pim_config = None
@@ -150,7 +157,7 @@ def calculate_multicast_groups(
         "RP Placement": "On spine switches (recommended)",
         "MTU": "Standard (no VXLAN overhead on underlay multicast)",
         "Groups Required": str(groups_used),
-        "Group Range": f"{base_group} - {_calculate_multicast_group(base_group, groups_used - 1)}",
+        "Group Range": f"{base_group} - {calculate_multicast_group(base_group, groups_used - 1) if groups_used > 0 else base_group}",
     }
 
     return MulticastResult(

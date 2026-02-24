@@ -7,7 +7,6 @@ from typing import Annotated, Any, cast
 
 import typer
 import yaml
-from rich.console import Console
 
 from evpn_ninja import __version__
 from evpn_ninja.calculators.bandwidth import LinkSpeed, calculate_bandwidth
@@ -92,8 +91,10 @@ def _list_presets_callback(ctx: typer.Context, value: bool) -> None:
         for name, preset in BUILTIN_PRESETS.items():
             console.print(f"  [cyan]{name}[/cyan]: {preset.description}")
 
-        # Load config to check for user presets
-        config = load_config()
+        # Load config to check for user presets, respecting --config if provided
+        # Note: ctx.params may be incomplete since this is an eager callback
+        config_path = ctx.params.get("config_file") if ctx.params else None
+        config = load_config(config_path)
         if config.presets:
             console.print("\n[bold]User Presets:[/bold]")
             for name, preset in config.presets.items():
@@ -126,7 +127,9 @@ def _validate_output_path(filepath: Path, base_dir: Path | None = None) -> Path:
     try:
         resolved.relative_to(base_resolved)
     except ValueError:
-        console.print(f"[red]Error: Path traversal detected. File must be within {base_resolved}[/red]")
+        console.print(
+            f"[red]Error: Path traversal detected. File must be within {base_resolved}[/red]"
+        )
         console.print(f"[red]Attempted path: {filepath} -> {resolved}[/red]")
         raise typer.Exit(1) from None
 
@@ -204,11 +207,6 @@ def _safe_mkdir(dirpath: Path, base_dir: Path | None = None) -> Path:
         raise typer.Exit(1) from None
 
 
-def _get_console(no_color: bool = False) -> Console:
-    """Get console with color settings."""
-    return Console(no_color=no_color, force_terminal=not no_color)
-
-
 def _get_default(config: Config, section: str, key: str, fallback: Any = None) -> Any:
     """Get default value from config.
 
@@ -232,27 +230,34 @@ def main(
     ctx: typer.Context,
     version: Annotated[
         bool | None,
-        typer.Option("--version", "-V", callback=version_callback, is_eager=True, help="Show version")
+        typer.Option(
+            "--version", "-V", callback=version_callback, is_eager=True, help="Show version"
+        ),
     ] = None,
     config_file: Annotated[
         Path | None,
-        typer.Option("--config", "-c", help="Path to config file (default: ~/.evpn-ninja.yaml)")
+        typer.Option("--config", "-c", help="Path to config file (default: ~/.evpn-ninja.yaml)"),
     ] = None,
     preset: Annotated[
         str | None,
-        typer.Option("--preset", "-P", help="Use preset configuration (small-dc, medium-dc, large-dc, etc.)")
+        typer.Option(
+            "--preset", "-P", help="Use preset configuration (small-dc, medium-dc, large-dc, etc.)"
+        ),
     ] = None,
     list_presets_flag: Annotated[
         bool | None,
-        typer.Option("--list-presets", callback=_list_presets_callback, is_eager=True, help="List available presets")
+        typer.Option(
+            "--list-presets",
+            callback=_list_presets_callback,
+            is_eager=True,
+            help="List available presets",
+        ),
     ] = None,
     no_color: Annotated[
-        bool,
-        typer.Option("--no-color", help="Disable colored output (for piping)")
+        bool, typer.Option("--no-color", help="Disable colored output (for piping)")
     ] = False,
     verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Verbose output with extra details")
+        bool, typer.Option("--verbose", "-v", help="Verbose output with extra details")
     ] = False,
 ) -> None:
     """VXLAN/EVPN Calculator CLI.
@@ -283,27 +288,31 @@ def main(
             console.print("Use --list-presets to see available presets")
             raise typer.Exit(1) from None
 
-        # Merge preset into config defaults
+        # Merge preset into config defaults via validated reconstruction
+        def _apply_preset_section(current: Any, preset_data: dict[str, Any]) -> Any:
+            """Merge preset values and reconstruct dataclass with validation."""
+            merged = {
+                **vars(current),
+                **{k: v for k, v in preset_data.items() if hasattr(current, k)},
+            }
+            try:
+                return type(current)(**merged)
+            except (TypeError, ValueError) as e:
+                console.print(f"[red]Invalid preset value: {e}[/red]")
+                raise typer.Exit(1) from None
+
         if preset_obj.fabric:
-            for key, val in preset_obj.fabric.items():
-                if hasattr(state.config.fabric, key):
-                    setattr(state.config.fabric, key, val)
+            state.config.fabric = _apply_preset_section(state.config.fabric, preset_obj.fabric)
         if preset_obj.ebgp:
-            for key, val in preset_obj.ebgp.items():
-                if hasattr(state.config.ebgp, key):
-                    setattr(state.config.ebgp, key, val)
+            state.config.ebgp = _apply_preset_section(state.config.ebgp, preset_obj.ebgp)
         if preset_obj.evpn:
-            for key, val in preset_obj.evpn.items():
-                if hasattr(state.config.evpn, key):
-                    setattr(state.config.evpn, key, val)
+            state.config.evpn = _apply_preset_section(state.config.evpn, preset_obj.evpn)
         if preset_obj.vni:
-            for key, val in preset_obj.vni.items():
-                if hasattr(state.config.vni, key):
-                    setattr(state.config.vni, key, val)
+            state.config.vni = _apply_preset_section(state.config.vni, preset_obj.vni)
         if preset_obj.multicast:
-            for key, val in preset_obj.multicast.items():
-                if hasattr(state.config.multicast, key):
-                    setattr(state.config.multicast, key, val)
+            state.config.multicast = _apply_preset_section(
+                state.config.multicast, preset_obj.multicast
+            )
 
         if state.verbose:
             console.print(f"[dim]Using preset: {preset}[/dim]")
@@ -313,29 +322,25 @@ def main(
 # MTU Command
 # =============================================================================
 
+
 @app.command()
 def mtu(
-    payload: Annotated[int, typer.Option("--payload", "-p", help="Inner payload size in bytes")] = 1500,
+    payload: Annotated[
+        int, typer.Option("--payload", "-p", help="Inner payload size in bytes")
+    ] = 1500,
     underlay: Annotated[
-        UnderlayType,
-        typer.Option("--underlay", "-u", help="Underlay network type")
+        UnderlayType, typer.Option("--underlay", "-u", help="Underlay network type")
     ] = UnderlayType.IPV4,
     outer_vlan_tags: Annotated[
-        int,
-        typer.Option("--outer-vlans", help="Number of VLAN tags on outer frame (0-2)")
+        int, typer.Option("--outer-vlans", help="Number of VLAN tags on outer frame (0-2)")
     ] = 0,
     inner_vlan_tags: Annotated[
-        int,
-        typer.Option("--inner-vlans", help="Number of VLAN tags on inner frame (0-2)")
+        int, typer.Option("--inner-vlans", help="Number of VLAN tags on inner frame (0-2)")
     ] = 0,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", "-s", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", "-s", help="Save output to file")] = None,
 ) -> None:
     """Calculate required MTU for VXLAN encapsulation."""
     result = calculate_mtu(
@@ -345,18 +350,21 @@ def mtu(
         inner_vlan_tags=inner_vlan_tags,
     )
 
-    if output == OutputFormat.JSON:
-        content = json.dumps(result.__dict__, default=lambda o: o.__dict__, indent=2)
-        if save:
-            _save_output(content, save)
+    from evpn_ninja.output import _serialize
+
+    if save:
+        if output == OutputFormat.TABLE:
+            output = OutputFormat.JSON
+        serialized = _serialize(result)
+        if output == OutputFormat.JSON:
+            content = json.dumps(serialized, indent=2, ensure_ascii=False)
         else:
-            output_json(result)
+            content = yaml.dump(serialized, default_flow_style=False, allow_unicode=True)
+        _save_output(content, save)
+    elif output == OutputFormat.JSON:
+        output_json(result)
     elif output == OutputFormat.YAML:
-        if save:
-            content = yaml.dump(result.__dict__, default_flow_style=False)
-            _save_output(content, save)
-        else:
-            output_yaml(result)
+        output_yaml(result)
     else:
         output_table(
             title="VXLAN MTU Breakdown",
@@ -364,41 +372,46 @@ def mtu(
             rows=[[layer.name, str(layer.size), layer.description] for layer in result.layers],
         )
         console.print()
-        output_key_value("Summary", {
-            "Total Overhead": f"{result.total_overhead} bytes",
-            "Total Frame Size": f"{result.total_frame_size} bytes",
-            "Required MTU": f"{result.required_mtu} bytes",
-            "Recommended MTU": f"{result.recommended_mtu} bytes",
-        })
+        output_key_value(
+            "Summary",
+            {
+                "Total Overhead": f"{result.total_overhead} bytes",
+                "Total Frame Size": f"{result.total_frame_size} bytes",
+                "Required MTU": f"{result.required_mtu} bytes",
+                "Recommended MTU": f"{result.recommended_mtu} bytes",
+            },
+        )
 
 
 # =============================================================================
 # VNI Command
 # =============================================================================
 
+
 @app.command()
 def vni(
     ctx: typer.Context,
     scheme: Annotated[
-        VNIScheme | None,
-        typer.Option("--scheme", "-s", help="VNI allocation scheme")
+        VNIScheme | None, typer.Option("--scheme", "-s", help="VNI allocation scheme")
     ] = None,
-    base_vni: Annotated[int | None, typer.Option("--base-vni", "-b", help="Base VNI number")] = None,
-    tenant_id: Annotated[int, typer.Option("--tenant-id", "-t", help="Tenant ID (for tenant-based scheme)")] = 1,
+    base_vni: Annotated[
+        int | None, typer.Option("--base-vni", "-b", help="Base VNI number")
+    ] = None,
+    tenant_id: Annotated[
+        int, typer.Option("--tenant-id", "-t", help="Tenant ID (for tenant-based scheme)")
+    ] = 1,
     start_vlan: Annotated[int | None, typer.Option("--start-vlan", help="Starting VLAN ID")] = None,
-    count: Annotated[int | None, typer.Option("--count", "-c", help="Number of VNIs to allocate")] = None,
+    count: Annotated[
+        int | None, typer.Option("--count", "-c", help="Number of VNIs to allocate")
+    ] = None,
     multicast_base: Annotated[
         str | None,
-        typer.Option("--mcast-base", help="Base multicast address", callback=multicast_callback)
+        typer.Option("--mcast-base", help="Base multicast address", callback=multicast_callback),
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate VNI allocation based on selected scheme.
 
@@ -410,7 +423,9 @@ def vni(
     base_vni = base_vni if base_vni is not None else state.config.vni.base_vni
     start_vlan = start_vlan if start_vlan is not None else state.config.vni.start_vlan
     count = count if count is not None else state.config.vni.count
-    multicast_base = multicast_base if multicast_base is not None else state.config.vni.multicast_base
+    multicast_base = (
+        multicast_base if multicast_base is not None else state.config.vni.multicast_base
+    )
 
     result = calculate_vni_allocation(
         scheme=scheme,
@@ -426,13 +441,16 @@ def vni(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("VNI Allocation Parameters", {
-            "Scheme": result.scheme,
-            "Base VNI": result.base_vni,
-            "Tenant ID": result.tenant_id or "N/A",
-            "Start VLAN": result.start_vlan,
-            "Count": result.count,
-        })
+        output_key_value(
+            "VNI Allocation Parameters",
+            {
+                "Scheme": result.scheme,
+                "Base VNI": result.base_vni,
+                "Tenant ID": result.tenant_id or "N/A",
+                "Start VLAN": result.start_vlan,
+                "Count": result.count,
+            },
+        )
         console.print()
         output_table(
             title="VNI Allocation Table",
@@ -448,37 +466,36 @@ def vni(
 # Fabric Command
 # =============================================================================
 
+
 @app.command()
 def fabric(
     ctx: typer.Context,
-    vteps: Annotated[int | None, typer.Option("--vteps", help="Number of VTEP (leaf) switches")] = None,
+    vteps: Annotated[
+        int | None, typer.Option("--vteps", help="Number of VTEP (leaf) switches")
+    ] = None,
     spines: Annotated[int | None, typer.Option("--spines", help="Number of spine switches")] = None,
     vnis: Annotated[int | None, typer.Option("--vnis", help="Total number of VNIs")] = None,
-    hosts: Annotated[int | None, typer.Option("--hosts", "-h", help="Average hosts per VTEP")] = None,
+    hosts: Annotated[
+        int | None, typer.Option("--hosts", "-h", help="Average hosts per VTEP")
+    ] = None,
     replication: Annotated[
-        ReplicationMode | None,
-        typer.Option("--replication", "-r", help="BUM replication mode")
+        ReplicationMode | None, typer.Option("--replication", "-r", help="BUM replication mode")
     ] = None,
     loopback_net: Annotated[
         str | None,
-        typer.Option("--loopback-net", help="Loopback network", callback=network_callback)
+        typer.Option("--loopback-net", help="Loopback network", callback=network_callback),
     ] = None,
     vtep_net: Annotated[
         str | None,
-        typer.Option("--vtep-net", help="VTEP loopback network", callback=network_callback)
+        typer.Option("--vtep-net", help="VTEP loopback network", callback=network_callback),
     ] = None,
     p2p_net: Annotated[
-        str | None,
-        typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
+        str | None, typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate fabric parameters for VXLAN/EVPN deployment.
 
@@ -490,8 +507,14 @@ def fabric(
     spines = spines if spines is not None else state.config.fabric.spine_count
     vnis = vnis if vnis is not None else state.config.fabric.vni_count
     hosts = hosts if hosts is not None else state.config.fabric.hosts_per_vtep
-    replication = replication if replication is not None else ReplicationMode(state.config.fabric.replication_mode)
-    loopback_net = loopback_net if loopback_net is not None else state.config.fabric.loopback_network
+    replication = (
+        replication
+        if replication is not None
+        else ReplicationMode(state.config.fabric.replication_mode)
+    )
+    loopback_net = (
+        loopback_net if loopback_net is not None else state.config.fabric.loopback_network
+    )
     vtep_net = vtep_net if vtep_net is not None else state.config.fabric.vtep_loopback_network
     p2p_net = p2p_net if p2p_net is not None else state.config.fabric.p2p_network
 
@@ -511,14 +534,17 @@ def fabric(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("Fabric Topology", {
-            "VTEP (Leaf) Count": result.vtep_count,
-            "Spine Count": result.spine_count,
-            "VNI Count": result.vni_count,
-            "Hosts per VTEP": result.hosts_per_vtep,
-            "Replication Mode": result.replication_mode,
-            "Total P2P Links": result.p2p_links_total,
-        })
+        output_key_value(
+            "Fabric Topology",
+            {
+                "VTEP (Leaf) Count": result.vtep_count,
+                "Spine Count": result.spine_count,
+                "VNI Count": result.vni_count,
+                "Hosts per VTEP": result.hosts_per_vtep,
+                "Replication Mode": result.replication_mode,
+                "Total P2P Links": result.p2p_links_total,
+            },
+        )
         console.print()
 
         output_table(
@@ -545,15 +571,18 @@ def fabric(
         )
         console.print()
 
-        output_key_value("Resource Estimates", {
-            "Total MAC Entries": result.estimates.total_mac_entries,
-            "MAC Entries per VTEP": result.estimates.mac_entries_per_vtep,
-            "EVPN Type-2 Routes": result.estimates.evpn_type2_routes,
-            "EVPN Type-3 Routes": result.estimates.evpn_type3_routes,
-            "BGP Sessions per Leaf": result.estimates.bgp_sessions_per_leaf,
-            "BGP Sessions Total": result.estimates.bgp_sessions_total,
-            "BUM Replication Factor": result.estimates.bum_replication_factor,
-        })
+        output_key_value(
+            "Resource Estimates",
+            {
+                "Total MAC Entries": result.estimates.total_mac_entries,
+                "MAC Entries per VTEP": result.estimates.mac_entries_per_vtep,
+                "EVPN Type-2 Routes": result.estimates.evpn_type2_routes,
+                "EVPN Type-3 Routes": result.estimates.evpn_type3_routes,
+                "BGP Sessions per Leaf": result.estimates.bgp_sessions_per_leaf,
+                "BGP Sessions Total": result.estimates.bgp_sessions_total,
+                "BUM Replication Factor": result.estimates.bum_replication_factor,
+            },
+        )
 
         # Display warnings if any
         if result.warnings:
@@ -567,30 +596,26 @@ def fabric(
 # EVPN Command
 # =============================================================================
 
+
 @app.command()
 def evpn(
     ctx: typer.Context,
     bgp_as: Annotated[int | None, typer.Option("--as", help="BGP AS number")] = None,
     loopback: Annotated[
         str | None,
-        typer.Option("--loopback", "-l", help="VTEP loopback IP", callback=ipv4_address_callback)
+        typer.Option("--loopback", "-l", help="VTEP loopback IP", callback=ipv4_address_callback),
     ] = None,
     l2_vni: Annotated[int, typer.Option("--l2-vni", help="Layer 2 VNI")] = 10010,
     vlan_id: Annotated[int, typer.Option("--vlan", help="VLAN ID")] = 10,
     l3_vni: Annotated[int | None, typer.Option("--l3-vni", help="Layer 3 VNI (optional)")] = None,
     vrf_name: Annotated[str | None, typer.Option("--vrf", help="VRF name (optional)")] = None,
     vendor: Annotated[
-        list[Vendor] | None,
-        typer.Option("--vendor", help="Vendor(s) to generate config for")
+        list[Vendor] | None, typer.Option("--vendor", help="Vendor(s) to generate config for")
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate EVPN parameters and generate vendor configurations.
 
@@ -603,7 +628,14 @@ def evpn(
 
     # Use configured vendors if none specified and config has vendors
     if vendor is None and state.config.evpn.vendors:
-        vendor = [Vendor(v) for v in state.config.evpn.vendors]
+        valid_vendors = []
+        for v in state.config.evpn.vendors:
+            try:
+                valid_vendors.append(Vendor(v))
+            except ValueError:
+                console.print(f"[yellow]Warning: Unknown vendor '{v}' in config, skipping[/yellow]")
+        if valid_vendors:
+            vendor = valid_vendors
 
     result = calculate_evpn_params(
         bgp_as=bgp_as,
@@ -620,31 +652,40 @@ def evpn(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("Input Parameters", {
-            "BGP AS": result.bgp_as,
-            "Loopback IP": result.loopback_ip,
-            "L2 VNI": result.l2_vni,
-            "VLAN ID": result.vlan_id,
-            "L3 VNI": result.l3_vni or "N/A",
-            "VRF Name": result.vrf_name or "N/A",
-        })
+        output_key_value(
+            "Input Parameters",
+            {
+                "BGP AS": result.bgp_as,
+                "Loopback IP": result.loopback_ip,
+                "L2 VNI": result.l2_vni,
+                "VLAN ID": result.vlan_id,
+                "L3 VNI": result.l3_vni or "N/A",
+                "VRF Name": result.vrf_name or "N/A",
+            },
+        )
         console.print()
 
-        output_key_value("L2 EVPN Parameters", {
-            "Route Distinguisher (RD)": result.l2_params.route_distinguisher,
-            "Route Target Import": result.l2_params.route_target_import,
-            "Route Target Export": result.l2_params.route_target_export,
-            "EVI": result.l2_params.evi,
-        })
+        output_key_value(
+            "L2 EVPN Parameters",
+            {
+                "Route Distinguisher (RD)": result.l2_params.route_distinguisher,
+                "Route Target Import": result.l2_params.route_target_import,
+                "Route Target Export": result.l2_params.route_target_export,
+                "EVI": result.l2_params.evi,
+            },
+        )
 
         if result.l3_params:
             console.print()
-            output_key_value("L3 EVPN Parameters", {
-                "Route Distinguisher (RD)": result.l3_params.route_distinguisher,
-                "Route Target Import": result.l3_params.route_target_import,
-                "Route Target Export": result.l3_params.route_target_export,
-                "EVI": result.l3_params.evi,
-            })
+            output_key_value(
+                "L3 EVPN Parameters",
+                {
+                    "Route Distinguisher (RD)": result.l3_params.route_distinguisher,
+                    "Route Target Import": result.l3_params.route_target_import,
+                    "Route Target Export": result.l3_params.route_target_export,
+                    "EVI": result.l3_params.evi,
+                },
+            )
 
         console.print()
         for cfg in result.configs:
@@ -652,44 +693,48 @@ def evpn(
             console.print()
 
     if save:
-        # Save all configs to file
-        content = "\n\n".join([f"# {cfg.vendor.upper()}\n{cfg.config}" for cfg in result.configs])
-        _save_output(content, save)
+        if not result.configs:
+            console.print(
+                "[yellow]Warning: No vendor configs to save (no vendors selected)[/yellow]"
+            )
+        else:
+            content = "\n\n".join(
+                [f"# {cfg.vendor.upper()}\n{cfg.config}" for cfg in result.configs]
+            )
+            _save_output(content, save)
 
 
 # =============================================================================
 # eBGP Underlay Command
 # =============================================================================
 
+
 @app.command()
 def ebgp(
     ctx: typer.Context,
-    spines: Annotated[int | None, typer.Option("--spines", "-s", help="Number of spine switches")] = None,
-    leaves: Annotated[int | None, typer.Option("--leaves", "-l", help="Number of leaf switches")] = None,
+    spines: Annotated[
+        int | None, typer.Option("--spines", "-s", help="Number of spine switches")
+    ] = None,
+    leaves: Annotated[
+        int | None, typer.Option("--leaves", "-l", help="Number of leaf switches")
+    ] = None,
     scheme: Annotated[
-        ASNScheme | None,
-        typer.Option("--scheme", help="ASN allocation scheme")
+        ASNScheme | None, typer.Option("--scheme", help="ASN allocation scheme")
     ] = None,
     base_asn: Annotated[
-        int | None,
-        typer.Option("--base-asn", help="Base ASN (for custom scheme)")
+        int | None, typer.Option("--base-asn", help="Base ASN (for custom scheme)")
     ] = None,
     p2p_net: Annotated[
-        str | None,
-        typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
+        str | None, typer.Option("--p2p-net", help="P2P links network", callback=network_callback)
     ] = None,
     spine_same_asn: Annotated[
         bool | None,
-        typer.Option("--spine-same-asn/--spine-unique-asn", help="Spines share same ASN")
+        typer.Option("--spine-same-asn/--spine-unique-asn", help="Spines share same ASN"),
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate eBGP underlay parameters (RFC 7938).
 
@@ -701,7 +746,9 @@ def ebgp(
     leaves = leaves if leaves is not None else state.config.ebgp.leaf_count
     scheme = scheme if scheme is not None else ASNScheme(state.config.ebgp.scheme)
     p2p_net = p2p_net if p2p_net is not None else state.config.ebgp.p2p_network
-    spine_same_asn = spine_same_asn if spine_same_asn is not None else state.config.ebgp.spine_asn_same
+    spine_same_asn = (
+        spine_same_asn if spine_same_asn is not None else state.config.ebgp.spine_asn_same
+    )
 
     result = calculate_ebgp_underlay(
         spine_count=spines,
@@ -717,23 +764,25 @@ def ebgp(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("eBGP Underlay Configuration", {
-            "ASN Scheme": result.scheme,
-            "Spine Count": result.spine_count,
-            "Leaf Count": result.leaf_count,
-            "Base ASN": result.base_asn,
-            "Spine ASN Range": result.spine_asn_range,
-            "Leaf ASN Range": result.leaf_asn_range,
-            "Total BGP Sessions": result.total_sessions,
-        })
+        output_key_value(
+            "eBGP Underlay Configuration",
+            {
+                "ASN Scheme": result.scheme,
+                "Spine Count": result.spine_count,
+                "Leaf Count": result.leaf_count,
+                "Base ASN": result.base_asn,
+                "Spine ASN Range": result.spine_asn_range,
+                "Leaf ASN Range": result.leaf_asn_range,
+                "Total BGP Sessions": result.total_sessions,
+            },
+        )
         console.print()
 
         output_table(
             title="ASN Assignments",
             columns=["Device", "Role", "ASN"],
             rows=[
-                [asn.device_name, asn.device_role, str(asn.asn)]
-                for asn in result.asn_assignments
+                [asn.device_name, asn.device_role, str(asn.asn)] for asn in result.asn_assignments
             ],
         )
         console.print()
@@ -742,10 +791,21 @@ def ebgp(
             title="BGP Sessions",
             columns=["Device A", "IP A", "ASN A", "Device B", "IP B", "ASN B"],
             rows=[
-                [s.device_a, s.device_a_ip, str(s.device_a_asn),
-                 s.device_b, s.device_b_ip, str(s.device_b_asn)]
+                [
+                    s.device_a,
+                    s.device_a_ip,
+                    str(s.device_a_asn),
+                    s.device_b,
+                    s.device_b_ip,
+                    str(s.device_b_asn),
+                ]
                 for s in result.bgp_sessions[:20]  # Limit to 20 for display
-            ] + ([["...", "...", "...", "...", "...", "..."]] if len(result.bgp_sessions) > 20 else []),
+            ]
+            + (
+                [["...", "...", "...", "...", "...", "..."]]
+                if len(result.bgp_sessions) > 20
+                else []
+            ),
             caption=f"P2P Network: {result.p2p_network}",
         )
 
@@ -754,35 +814,35 @@ def ebgp(
 # Multicast Command
 # =============================================================================
 
+
 @app.command()
 def multicast(
     ctx: typer.Context,
     vni_start: Annotated[int | None, typer.Option("--vni-start", help="Starting VNI")] = None,
-    vni_count: Annotated[int | None, typer.Option("--vni-count", "-c", help="Number of VNIs")] = None,
+    vni_count: Annotated[
+        int | None, typer.Option("--vni-count", "-c", help="Number of VNIs")
+    ] = None,
     scheme: Annotated[
-        MulticastScheme | None,
-        typer.Option("--scheme", "-s", help="Multicast allocation scheme")
+        MulticastScheme | None, typer.Option("--scheme", "-s", help="Multicast allocation scheme")
     ] = None,
     base_group: Annotated[
         str | None,
-        typer.Option("--base-group", "-g", help="Base multicast group address", callback=multicast_callback)
+        typer.Option(
+            "--base-group", "-g", help="Base multicast group address", callback=multicast_callback
+        ),
     ] = None,
     vnis_per_group: Annotated[
         int | None,
-        typer.Option("--vnis-per-group", help="VNIs per group (for shared/range schemes)")
+        typer.Option("--vnis-per-group", help="VNIs per group (for shared/range schemes)"),
     ] = None,
     rp_address: Annotated[
         str | None,
-        typer.Option("--rp", help="PIM Rendezvous Point address", callback=ipv4_address_callback)
+        typer.Option("--rp", help="PIM Rendezvous Point address", callback=ipv4_address_callback),
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate multicast groups for VXLAN BUM replication.
 
@@ -794,7 +854,9 @@ def multicast(
     vni_count = vni_count if vni_count is not None else state.config.multicast.vni_count
     scheme = scheme if scheme is not None else MulticastScheme(state.config.multicast.scheme)
     base_group = base_group if base_group is not None else state.config.multicast.base_group
-    vnis_per_group = vnis_per_group if vnis_per_group is not None else state.config.multicast.vnis_per_group
+    vnis_per_group = (
+        vnis_per_group if vnis_per_group is not None else state.config.multicast.vnis_per_group
+    )
 
     result = calculate_multicast_groups(
         vni_start=vni_start,
@@ -810,23 +872,24 @@ def multicast(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("Multicast Configuration", {
-            "Scheme": result.scheme,
-            "Base Group": result.base_group,
-            "VNI Start": result.vni_start,
-            "VNI Count": result.vni_count,
-            "Groups Used": result.groups_used,
-        })
+        output_key_value(
+            "Multicast Configuration",
+            {
+                "Scheme": result.scheme,
+                "Base Group": result.base_group,
+                "VNI Start": result.vni_start,
+                "VNI Count": result.vni_count,
+                "Groups Used": result.groups_used,
+            },
+        )
         console.print()
 
         # Show first 20 mappings
         output_table(
             title="VNI to Multicast Mappings",
             columns=["VNI", "Multicast Group"],
-            rows=[
-                [str(m.vni), m.multicast_group]
-                for m in result.mappings[:20]
-            ] + ([["...", "..."]] if len(result.mappings) > 20 else []),
+            rows=[[str(m.vni), m.multicast_group] for m in result.mappings[:20]]
+            + ([["...", "..."]] if len(result.mappings) > 20 else []),
         )
         console.print()
 
@@ -834,41 +897,40 @@ def multicast(
 
         if result.pim_config:
             console.print()
-            output_key_value("PIM Configuration", {
-                "RP Address": result.pim_config.rp_address,
-                "Group Range": result.pim_config.rp_group_range,
-                "Anycast RP": "Yes" if result.pim_config.anycast_rp else "No",
-            })
+            output_key_value(
+                "PIM Configuration",
+                {
+                    "RP Address": result.pim_config.rp_address,
+                    "Group Range": result.pim_config.rp_group_range,
+                    "Anycast RP": "Yes" if result.pim_config.anycast_rp else "No",
+                },
+            )
 
 
 # =============================================================================
 # Route Reflector Command
 # =============================================================================
 
+
 @app.command()
 def rr(
-    clients: Annotated[int, typer.Option("--clients", "-c", help="Number of BGP clients (VTEPs)")] = 10,
+    clients: Annotated[
+        int, typer.Option("--clients", "-c", help="Number of BGP clients (VTEPs)")
+    ] = 10,
     bgp_as: Annotated[int, typer.Option("--as", help="BGP AS number")] = 65000,
     placement: Annotated[
-        RRPlacement,
-        typer.Option("--placement", "-p", help="RR placement strategy")
+        RRPlacement, typer.Option("--placement", "-p", help="RR placement strategy")
     ] = RRPlacement.SPINE,
     redundancy: Annotated[
-        RRRedundancy,
-        typer.Option("--redundancy", "-r", help="RR redundancy model")
+        RRRedundancy, typer.Option("--redundancy", "-r", help="RR redundancy model")
     ] = RRRedundancy.PAIR,
     rr_network: Annotated[
-        str,
-        typer.Option("--rr-network", help="RR loopback network", callback=network_callback)
+        str, typer.Option("--rr-network", help="RR loopback network", callback=network_callback)
     ] = "10.255.0.0/24",
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate BGP Route Reflector configuration for EVPN overlay."""
     result = calculate_route_reflector(
@@ -884,23 +946,23 @@ def rr(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("Route Reflector Design", {
-            "Placement": result.placement,
-            "Redundancy": result.redundancy,
-            "BGP AS": result.bgp_as,
-            "Total RR Nodes": result.total_rr_nodes,
-            "Total Clients": result.total_clients,
-        })
+        output_key_value(
+            "Route Reflector Design",
+            {
+                "Placement": result.placement,
+                "Redundancy": result.redundancy,
+                "BGP AS": result.bgp_as,
+                "Total RR Nodes": result.total_rr_nodes,
+                "Total Clients": result.total_clients,
+            },
+        )
         console.print()
 
         for cluster in result.clusters:
             output_table(
                 title=f"Cluster {cluster.cluster_id}",
                 columns=["Name", "Loopback IP", "Role"],
-                rows=[
-                    [m.name, m.loopback_ip, m.role]
-                    for m in cluster.members
-                ],
+                rows=[[m.name, m.loopback_ip, m.role] for m in cluster.members],
                 caption=f"Clients: ~{cluster.client_count}",
             )
             console.print()
@@ -930,34 +992,25 @@ def rr(
 # Bandwidth Command
 # =============================================================================
 
+
 @app.command()
 def bandwidth(
     spines: Annotated[int, typer.Option("--spines", "-s", help="Number of spine switches")] = 2,
     leaves: Annotated[int, typer.Option("--leaves", "-l", help="Number of leaf switches")] = 4,
     uplink_speed: Annotated[
-        LinkSpeed,
-        typer.Option("--uplink-speed", help="Leaf-to-spine link speed")
+        LinkSpeed, typer.Option("--uplink-speed", help="Leaf-to-spine link speed")
     ] = LinkSpeed.GE_100,
-    uplinks: Annotated[
-        int,
-        typer.Option("--uplinks", "-u", help="Uplinks per leaf")
-    ] = 2,
+    uplinks: Annotated[int, typer.Option("--uplinks", "-u", help="Uplinks per leaf")] = 2,
     downlink_speed: Annotated[
-        LinkSpeed,
-        typer.Option("--downlink-speed", help="Host-facing link speed")
+        LinkSpeed, typer.Option("--downlink-speed", help="Host-facing link speed")
     ] = LinkSpeed.GE_25,
     downlinks: Annotated[
-        int,
-        typer.Option("--downlinks", "-d", help="Downlink ports per leaf")
+        int, typer.Option("--downlinks", "-d", help="Downlink ports per leaf")
     ] = 48,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate fabric bandwidth and oversubscription ratios."""
     result = calculate_bandwidth(
@@ -974,38 +1027,54 @@ def bandwidth(
     elif output == OutputFormat.YAML:
         output_yaml(result)
     else:
-        output_key_value("Fabric Topology", {
-            "Spine Count": result.spine_count,
-            "Leaf Count": result.leaf_count,
-            "Uplink Speed": result.uplink_speed,
-            "Uplinks per Leaf": result.uplink_count_per_leaf,
-            "Downlink Speed": result.downlink_speed,
-            "Downlinks per Leaf": result.downlink_count_per_leaf,
-        })
+        output_key_value(
+            "Fabric Topology",
+            {
+                "Spine Count": result.spine_count,
+                "Leaf Count": result.leaf_count,
+                "Uplink Speed": result.uplink_speed,
+                "Uplinks per Leaf": result.uplink_count_per_leaf,
+                "Downlink Speed": result.downlink_speed,
+                "Downlinks per Leaf": result.downlink_count_per_leaf,
+            },
+        )
         console.print()
 
-        output_key_value("Bandwidth Summary", {
-            "Leaf Uplink Bandwidth": f"{result.leaf_uplink_bandwidth_gbps} Gbps",
-            "Leaf Downlink Bandwidth": f"{result.leaf_downlink_bandwidth_gbps} Gbps",
-            "Spine Total Bandwidth": f"{result.spine_total_bandwidth_gbps} Gbps",
-            "Fabric Bisection Bandwidth": f"{result.fabric_bisection_bandwidth_gbps} Gbps",
-        })
+        output_key_value(
+            "Bandwidth Summary",
+            {
+                "Leaf Uplink Bandwidth": f"{result.leaf_uplink_bandwidth_gbps} Gbps",
+                "Leaf Downlink Bandwidth": f"{result.leaf_downlink_bandwidth_gbps} Gbps",
+                "Spine Total Bandwidth": f"{result.spine_total_bandwidth_gbps} Gbps",
+                "Fabric Bisection Bandwidth": f"{result.fabric_bisection_bandwidth_gbps} Gbps",
+            },
+        )
         console.print()
 
         oversub = result.leaf_oversubscription
-        status = "[green]Non-blocking[/green]" if oversub.is_non_blocking else f"[yellow]{oversub.oversubscription_ratio:.1f}:1[/yellow]"
-        output_key_value("Oversubscription Analysis", {
-            "Tier": oversub.tier_name,
-            "Downlink BW": f"{oversub.downlink_bandwidth_gbps} Gbps",
-            "Uplink BW": f"{oversub.uplink_bandwidth_gbps} Gbps",
-            "Ratio": status,
-        })
+        status = (
+            "[green]Non-blocking[/green]"
+            if oversub.is_non_blocking
+            else f"[yellow]{oversub.oversubscription_ratio:.1f}:1[/yellow]"
+        )
+        output_key_value(
+            "Oversubscription Analysis",
+            {
+                "Tier": oversub.tier_name,
+                "Downlink BW": f"{oversub.downlink_bandwidth_gbps} Gbps",
+                "Uplink BW": f"{oversub.uplink_bandwidth_gbps} Gbps",
+                "Ratio": status,
+            },
+        )
         console.print()
 
-        output_key_value("ECMP Analysis", {
-            "ECMP Paths": result.ecmp_paths,
-            "Hash Efficiency": f"{result.hash_efficiency * 100:.0f}%",
-        })
+        output_key_value(
+            "ECMP Analysis",
+            {
+                "ECMP Paths": result.ecmp_paths,
+                "Hash Efficiency": f"{result.hash_efficiency * 100:.0f}%",
+            },
+        )
         console.print()
 
         output_table(
@@ -1032,24 +1101,24 @@ def bandwidth(
 # Topology Command
 # =============================================================================
 
+
 @app.command()
 def topology(
     spines: Annotated[int, typer.Option("--spines", "-s", help="Number of spine switches")] = 2,
     leaves: Annotated[int, typer.Option("--leaves", "-l", help="Number of leaf switches")] = 4,
-    uplink_speed: Annotated[str, typer.Option("--uplink-speed", help="Leaf-to-spine link speed")] = "100G",
-    downlink_speed: Annotated[str, typer.Option("--downlink-speed", help="Host-facing link speed")] = "25G",
+    uplink_speed: Annotated[
+        str, typer.Option("--uplink-speed", help="Leaf-to-spine link speed")
+    ] = "100G",
+    downlink_speed: Annotated[
+        str, typer.Option("--downlink-speed", help="Host-facing link speed")
+    ] = "25G",
     format_type: Annotated[
-        str,
-        typer.Option("--format", "-f", help="Output format: ascii, dot, or both")
+        str, typer.Option("--format", "-f", help="Output format: ascii, dot, or both")
     ] = "both",
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Data output format (json/yaml)")
+        OutputFormat, typer.Option("--output", "-o", help="Data output format (json/yaml)")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save Graphviz DOT to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save Graphviz DOT to file")] = None,
 ) -> None:
     """Generate leaf-spine topology visualization (ASCII or Graphviz DOT)."""
     result = generate_topology(
@@ -1070,7 +1139,9 @@ def topology(
 
         if format_type in ("dot", "both"):
             console.print("[bold]Graphviz DOT Output:[/bold]")
-            console.print("(Save with --save topology.dot, then: dot -Tpng topology.dot -o topology.png)")
+            console.print(
+                "(Save with --save topology.dot, then: dot -Tpng topology.dot -o topology.png)"
+            )
             console.print()
             output_config("Graphviz DOT", result.graphviz_dot)
 
@@ -1083,10 +1154,12 @@ def topology(
 # Interactive Command
 # =============================================================================
 
+
 @app.command()
 def interactive() -> None:
     """Launch interactive mode with guided input."""
     from evpn_ninja.interactive import run_interactive
+
     run_interactive()
 
 
@@ -1094,38 +1167,34 @@ def interactive() -> None:
 # Export Command
 # =============================================================================
 
+
 @app.command()
 def export(
     format_type: Annotated[
         str,
-        typer.Argument(help="Export format: ansible, nornir, containerlab, eve-ng, gns3, or all")
+        typer.Argument(help="Export format: ansible, nornir, containerlab, eve-ng, gns3, or all"),
     ] = "ansible",
     spines: Annotated[int, typer.Option("--spines", "-s", help="Number of spine switches")] = 2,
     leaves: Annotated[int, typer.Option("--leaves", "-l", help="Number of leaf switches")] = 4,
     bgp_as: Annotated[int, typer.Option("--as", help="BGP AS number")] = 65000,
     loopback_net: Annotated[
-        str,
-        typer.Option("--loopback-net", help="Loopback network", callback=network_callback)
+        str, typer.Option("--loopback-net", help="Loopback network", callback=network_callback)
     ] = "10.0.0.0/24",
     vtep_net: Annotated[
-        str,
-        typer.Option("--vtep-net", help="VTEP loopback network", callback=network_callback)
+        str, typer.Option("--vtep-net", help="VTEP loopback network", callback=network_callback)
     ] = "10.0.1.0/24",
     platform: Annotated[
         str,
-        typer.Option("--platform", "-p", help="Device platform (eos, nxos, srlinux, sonic, etc.)")
+        typer.Option("--platform", "-p", help="Device platform (eos, nxos, srlinux, sonic, etc.)"),
     ] = "eos",
     lab_name: Annotated[
-        str,
-        typer.Option("--lab-name", help="Containerlab lab name")
+        str, typer.Option("--lab-name", help="Containerlab lab name")
     ] = "evpn-fabric",
     include_hosts: Annotated[
-        bool,
-        typer.Option("--include-hosts/--no-hosts", help="Include test hosts in containerlab")
+        bool, typer.Option("--include-hosts/--no-hosts", help="Include test hosts in containerlab")
     ] = False,
     output_dir: Annotated[
-        Path | None,
-        typer.Option("--output-dir", "-o", help="Output directory for files")
+        Path | None, typer.Option("--output-dir", "-o", help="Output directory for files")
     ] = None,
 ) -> None:
     """Export fabric configuration for automation tools and lab simulators.
@@ -1188,25 +1257,43 @@ def export(
     loopback_hosts = list(loopback_network.hosts())
     vtep_hosts = list(vtep_network.hosts())
 
+    total_devices = spines + leaves
+    if len(loopback_hosts) < total_devices:
+        console.print(
+            f"[red]Error: loopback network {loopback_net} has only {len(loopback_hosts)} "
+            f"usable IPs but {total_devices} devices require addresses[/red]"
+        )
+        raise typer.Exit(1) from None
+    if len(vtep_hosts) < leaves:
+        console.print(
+            f"[red]Error: VTEP network {vtep_net} has only {len(vtep_hosts)} "
+            f"usable IPs but {leaves} leaf switches require VTEP addresses[/red]"
+        )
+        raise typer.Exit(1) from None
+
     spine_list = []
     for i in range(spines):
-        spine_list.append({
-            "name": f"spine-{i + 1}",
-            "ip": str(loopback_hosts[i]) if i < len(loopback_hosts) else f"10.0.0.{i + 1}",
-            "loopback": str(loopback_hosts[i]) if i < len(loopback_hosts) else f"10.0.0.{i + 1}",
-            "asn": bgp_as,
-        })
+        spine_list.append(
+            {
+                "name": f"spine-{i + 1}",
+                "ip": str(loopback_hosts[i]),
+                "loopback": str(loopback_hosts[i]),
+                "asn": bgp_as,
+            }
+        )
 
     leaf_list = []
     for i in range(leaves):
         idx = spines + i
-        leaf_list.append({
-            "name": f"leaf-{i + 1}",
-            "ip": str(loopback_hosts[idx]) if idx < len(loopback_hosts) else f"10.0.0.{idx + 1}",
-            "loopback": str(loopback_hosts[idx]) if idx < len(loopback_hosts) else f"10.0.0.{idx + 1}",
-            "vtep_ip": str(vtep_hosts[i]) if i < len(vtep_hosts) else f"10.0.1.{i + 1}",
-            "asn": bgp_as,
-        })
+        leaf_list.append(
+            {
+                "name": f"leaf-{i + 1}",
+                "ip": str(loopback_hosts[idx]),
+                "loopback": str(loopback_hosts[idx]),
+                "vtep_ip": str(vtep_hosts[i]),
+                "asn": bgp_as,
+            }
+        )
 
     # Generate output with safe directory creation
     if output_dir:
@@ -1364,15 +1451,12 @@ def export(
 # Shell Completion Command
 # =============================================================================
 
+
 @app.command()
 def completion(
-    shell: Annotated[
-        str,
-        typer.Argument(help="Shell type: bash, zsh, fish, or powershell")
-    ],
+    shell: Annotated[str, typer.Argument(help="Shell type: bash, zsh, fish, or powershell")],
     install: Annotated[
-        bool,
-        typer.Option("--install", "-i", help="Install completion to shell config")
+        bool, typer.Option("--install", "-i", help="Install completion to shell config")
     ] = False,
 ) -> None:
     """Generate shell completion script.
@@ -1399,7 +1483,7 @@ def completion(
     script_name = "evpn-ninja"
 
     if shell == "bash":
-        script = f'''# Bash completion for evpn-ninja
+        script = f"""# Bash completion for evpn-ninja
 _evpn_ninja_completions() {{
     local IFS=$'\\n'
     COMPREPLY=( $(env COMP_WORDS="${{COMP_WORDS[*]}}" \\
@@ -1409,22 +1493,22 @@ _evpn_ninja_completions() {{
     return 0
 }}
 complete -o default -F _evpn_ninja_completions {script_name}
-'''
+"""
     elif shell == "zsh":
-        script = f'''#compdef evpn-ninja
+        script = f"""#compdef evpn-ninja
 _evpn_ninja_completions() {{
     eval $(env _TYPER_COMPLETE_ARGS="${{words[1,$CURRENT]}}" \\
            {env_var}=complete_zsh \\
            {script_name})
 }}
 compdef _evpn_ninja_completions {script_name}
-'''
+"""
     elif shell == "fish":
-        script = f'''# Fish completion for evpn-ninja
+        script = f"""# Fish completion for evpn-ninja
 complete -c {script_name} -f -a "(env {env_var}=complete_fish COMP_WORDS=(commandline -cp) COMP_CWORD=(commandline -t) {script_name})"
-'''
+"""
     else:  # powershell
-        script = f'''# PowerShell completion for evpn-ninja
+        script = f"""# PowerShell completion for evpn-ninja
 Register-ArgumentCompleter -Native -CommandName {script_name} -ScriptBlock {{
     param($wordToComplete, $commandAst, $cursorPosition)
     $env:{env_var} = 'complete_powershell'
@@ -1435,7 +1519,7 @@ Register-ArgumentCompleter -Native -CommandName {script_name} -ScriptBlock {{
     Remove-Item Env:{env_var}
     Remove-Item Env:_TYPER_COMPLETE_ARGS
 }}
-'''
+"""
 
     if install:
         # Determine config file
@@ -1501,9 +1585,14 @@ app.add_typer(config_app, name="config")
 def config_show(ctx: typer.Context) -> None:
     """Show current configuration."""
     state = _get_state(ctx)
+    # Respect --config flag from parent context
+    parent_ctx = ctx.parent
+    config_path = DEFAULT_CONFIG_PATH
+    if parent_ctx and parent_ctx.params.get("config_file"):
+        config_path = Path(parent_ctx.params["config_file"])
     config_data = {
-        "config_file": str(DEFAULT_CONFIG_PATH),
-        "config_exists": DEFAULT_CONFIG_PATH.exists(),
+        "config_file": str(config_path),
+        "config_exists": config_path.exists(),
         "active_preset": state.active_preset,
         "defaults": {
             "mtu": {
@@ -1538,8 +1627,7 @@ def config_show(ctx: typer.Context) -> None:
 @config_app.command("init")
 def config_init(
     force: Annotated[
-        bool,
-        typer.Option("--force", "-f", help="Overwrite existing config file")
+        bool, typer.Option("--force", "-f", help="Overwrite existing config file")
     ] = False,
 ) -> None:
     """Initialize default configuration file at ~/.evpn-ninja.yaml."""
@@ -1566,34 +1654,29 @@ def config_path() -> None:
 # Multi-homing Command
 # =============================================================================
 
+
 @app.command()
 def multihoming(
-    es_count: Annotated[int, typer.Option("--es-count", "-e", help="Number of Ethernet Segments")] = 1,
+    es_count: Annotated[
+        int, typer.Option("--es-count", "-e", help="Number of Ethernet Segments")
+    ] = 1,
     peers: Annotated[int, typer.Option("--peers", "-p", help="PE peers per ES")] = 2,
     mode: Annotated[
-        MultiHomingMode,
-        typer.Option("--mode", "-m", help="Multi-homing mode")
+        MultiHomingMode, typer.Option("--mode", "-m", help="Multi-homing mode")
     ] = MultiHomingMode.ACTIVE_ACTIVE,
     esi_type: Annotated[
-        ESIType,
-        typer.Option("--esi-type", help="ESI type (type-0, type-1, type-3)")
+        ESIType, typer.Option("--esi-type", help="ESI type (type-0, type-1, type-3)")
     ] = ESIType.TYPE_0,
     system_mac: Annotated[
-        str,
-        typer.Option("--system-mac", help="LACP system MAC address")
+        str, typer.Option("--system-mac", help="LACP system MAC address")
     ] = "00:00:00:00:00:01",
     vendor: Annotated[
-        list[str] | None,
-        typer.Option("--vendor", "-v", help="Vendor(s) to generate config for")
+        list[str] | None, typer.Option("--vendor", "-v", help="Vendor(s) to generate config for")
     ] = None,
     output: Annotated[
-        OutputFormat,
-        typer.Option("--output", "-o", help="Output format")
+        OutputFormat, typer.Option("--output", "-o", help="Output format")
     ] = OutputFormat.TABLE,
-    save: Annotated[
-        Path | None,
-        typer.Option("--save", help="Save output to file")
-    ] = None,
+    save: Annotated[Path | None, typer.Option("--save", help="Save output to file")] = None,
 ) -> None:
     """Calculate EVPN multi-homing parameters (ESI, LACP, ES-RT).
 
@@ -1621,24 +1704,29 @@ def multihoming(
         output_yaml(result)
     else:
         # Summary
-        output_key_value("Multi-homing Summary", {
-            "Ethernet Segments": result.total_es_count,
-            "PE Switches": result.total_pe_count,
-            "Redundancy Mode": result.redundancy_mode,
-            "LACP System MAC": result.lacp_system_mac,
-        })
+        output_key_value(
+            "Multi-homing Summary",
+            {
+                "Ethernet Segments": result.total_es_count,
+                "PE Switches": result.total_pe_count,
+                "Redundancy Mode": result.redundancy_mode,
+                "LACP System MAC": result.lacp_system_mac,
+            },
+        )
         console.print()
 
         # ES Details table
         es_rows = []
         for es in result.ethernet_segments:
-            es_rows.append([
-                es.name,
-                es.esi_config.esi,
-                es.esi_config.esi_type,
-                es.mode,
-                es.df_election,
-            ])
+            es_rows.append(
+                [
+                    es.name,
+                    es.esi_config.esi,
+                    es.esi_config.esi_type,
+                    es.mode,
+                    es.df_election,
+                ]
+            )
 
         output_table(
             title="Ethernet Segments",
@@ -1652,13 +1740,15 @@ def multihoming(
             peer_rows = []
             for es in result.ethernet_segments:
                 for peer in es.peers:
-                    peer_rows.append([
-                        es.name,
-                        peer.name,
-                        peer.loopback_ip,
-                        peer.interface,
-                        peer.lacp_config.system_id,
-                    ])
+                    peer_rows.append(
+                        [
+                            es.name,
+                            peer.name,
+                            peer.loopback_ip,
+                            peer.interface,
+                            peer.lacp_config.system_id,
+                        ]
+                    )
 
             output_table(
                 title="PE Peer Configurations",
@@ -1673,19 +1763,20 @@ def multihoming(
                 output_config(vendor_name.upper(), config)
 
     if save:
-        if output == OutputFormat.JSON:
-            import json
-            content = json.dumps(result.__dict__, indent=2, default=str)
-        elif output == OutputFormat.YAML:
-            content = yaml.dump(result.__dict__, default_flow_style=False)
+        from evpn_ninja.output import _serialize
+
+        serialized = _serialize(result)
+        if output == OutputFormat.YAML:
+            content = yaml.dump(serialized, default_flow_style=False, allow_unicode=True)
         else:
-            content = f"Multi-homing: {result.total_es_count} ES, {result.total_pe_count} PEs"
+            content = json.dumps(serialized, indent=2, ensure_ascii=False, default=str)
         _save_output(content, save)
 
 
 # =============================================================================
 # Presets Command
 # =============================================================================
+
 
 @app.command()
 def presets(ctx: typer.Context) -> None:

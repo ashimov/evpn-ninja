@@ -1,28 +1,26 @@
 """Tests for security functions - path traversal, input validation, etc."""
 
-import os
-import tempfile
+import sys
 from pathlib import Path
 
 import pytest
 from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
-from evpn_ninja.cli import (
-    _validate_output_path,
-    _safe_write_file,
-    _safe_mkdir,
-    app,
-)
 from evpn_ninja.calculators.fabric import (
-    MAX_VTEP_COUNT,
+    MAX_HOSTS_PER_VTEP,
     MAX_SPINE_COUNT,
     MAX_VNI_COUNT,
-    MAX_HOSTS_PER_VTEP,
+    MAX_VTEP_COUNT,
     CapacityWarning,
     calculate_fabric_params,
 )
-
+from evpn_ninja.cli import (
+    _safe_mkdir,
+    _safe_write_file,
+    _validate_output_path,
+    app,
+)
 
 runner = CliRunner()
 
@@ -58,6 +56,9 @@ class TestPathTraversalProtection:
             _validate_output_path(filepath, base_dir)
         assert exc_info.value.exit_code == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="symlinks require elevated privileges on Windows"
+    )
     def test_symlink_traversal_rejected(self, tmp_path: Path):
         """Test that symlink-based traversal is rejected."""
         # Create a symlink pointing outside
@@ -226,10 +227,15 @@ class TestExportPathTraversal:
     def test_export_rejects_path_traversal(self, tmp_path: Path, monkeypatch):
         """Test that export command rejects path traversal in output-dir."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "export", "ansible",
-            "--output-dir", "../outside",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "export",
+                "ansible",
+                "--output-dir",
+                "../outside",
+            ],
+        )
         # Should fail due to path traversal
         assert result.exit_code == 1
         assert "Path traversal" in result.stdout or "Error" in result.stdout
@@ -238,10 +244,15 @@ class TestExportPathTraversal:
         """Test that export command accepts valid paths."""
         monkeypatch.chdir(tmp_path)
         output_dir = tmp_path / "output"
-        result = runner.invoke(app, [
-            "export", "ansible",
-            "--output-dir", str(output_dir),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "export",
+                "ansible",
+                "--output-dir",
+                str(output_dir),
+            ],
+        )
         assert result.exit_code == 0
         assert (output_dir / "ansible" / "inventory.yaml").exists()
 

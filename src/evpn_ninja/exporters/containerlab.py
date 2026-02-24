@@ -3,13 +3,15 @@
 Generates Containerlab topology files from calculator results.
 """
 
+import re
+from ipaddress import IPv4Network
 from typing import Any
 
 # Containerlab node kinds for different vendors/platforms
 CLAB_KINDS = {
     "eos": "ceos",
     "arista": "ceos",
-    "nxos": "cisco_nxos",
+    "nxos": "cisco_nxos9000v",
     "cisco_nxos": "cisco_nxos9000v",
     "iosxr": "cisco_xrd",
     "iosxe": "cisco_csr1000v",
@@ -39,6 +41,16 @@ CLAB_IMAGES = {
 }
 
 
+def _sanitize_name(name: str) -> str:
+    """Sanitize a name for safe use in YAML output."""
+    # Allow only alphanumeric, hyphens, underscores, and dots
+    sanitized = re.sub(r"[^a-zA-Z0-9\-_.]", "-", name)
+    # Collapse multiple hyphens
+    sanitized = re.sub(r"-{2,}", "-", sanitized)
+    # Strip leading/trailing hyphens
+    return sanitized.strip("-") or "node"
+
+
 def export_containerlab_topology(
     spines: list[dict[str, Any]],
     leaves: list[dict[str, Any]],
@@ -63,6 +75,7 @@ def export_containerlab_topology(
     Returns:
         Containerlab topology as YAML string
     """
+    lab_name = _sanitize_name(lab_name)
     kind = CLAB_KINDS.get(platform, platform)
     image = CLAB_IMAGES.get(kind, f"{kind}:latest")
 
@@ -85,138 +98,210 @@ def export_containerlab_topology(
 
     # Add linux kind for hosts if needed
     if include_hosts:
-        lines.extend([
-            "    linux:",
-            "      image: alpine:latest",
-        ])
+        lines.extend(
+            [
+                "    linux:",
+                "      image: alpine:latest",
+            ]
+        )
 
-    lines.extend([
-        "",
-        "  nodes:",
-    ])
+    lines.extend(
+        [
+            "",
+            "  nodes:",
+        ]
+    )
 
     # Add spine nodes
-    mgmt_ip_base = int(mgmt_network.split('.')[2])
-    ip_counter = 1
+    mgmt_net = IPv4Network(mgmt_network, strict=False)
+    mgmt_hosts = list(mgmt_net.hosts())
+    ip_counter = 0
+
+    # Check mgmt network capacity
+    total_nodes = len(spines) + len(leaves)
+    if include_hosts:
+        total_nodes += len(leaves) * hosts_per_leaf
+    if total_nodes > len(mgmt_hosts):
+        raise ValueError(
+            f"Management network {mgmt_network} has only {len(mgmt_hosts)} usable IPs "
+            f"but {total_nodes} nodes require addresses"
+        )
+
+    # Detect name collisions after sanitization (including host nodes)
+    all_names: list[str] = []
+    for i, spine in enumerate(spines):
+        all_names.append(_sanitize_name(spine.get("name", f"spine-{i + 1}")))
+    for i, leaf in enumerate(leaves):
+        all_names.append(_sanitize_name(leaf.get("name", f"leaf-{i + 1}")))
+    if include_hosts:
+        for i in range(len(leaves)):
+            for h in range(hosts_per_leaf):
+                hname = f"host-{i + 1}-{h + 1}" if hosts_per_leaf > 1 else f"host-{i + 1}"
+                all_names.append(hname)
+    seen: set[str] = set()
+    for name in all_names:
+        if name in seen:
+            raise ValueError(f"Node name collision after sanitization: '{name}'")
+        seen.add(name)
 
     for i, spine in enumerate(spines):
-        spine_name = spine.get("name", f"spine-{i + 1}")
-        spine_ip = f"172.20.{mgmt_ip_base}.{ip_counter}"
+        spine_name = _sanitize_name(spine.get("name", f"spine-{i + 1}"))
+        spine_ip = (
+            str(mgmt_hosts[ip_counter])
+            if ip_counter < len(mgmt_hosts)
+            else f"172.20.20.{ip_counter + 1}"
+        )
         ip_counter += 1
 
-        lines.extend([
-            f"    {spine_name}:",
-            f"      kind: {kind}",
-            f"      mgmt-ipv4: {spine_ip}",
-        ])
+        lines.extend(
+            [
+                f"    {spine_name}:",
+                f"      kind: {kind}",
+                f"      mgmt-ipv4: {spine_ip}",
+            ]
+        )
 
         # Add startup config or environment variables based on platform
         if kind in ("ceos", "srl"):
-            lines.extend([
-                "      startup-config: configs/" + spine_name + ".cfg",
-            ])
+            lines.extend(
+                [
+                    "      startup-config: configs/" + spine_name + ".cfg",
+                ]
+            )
         elif kind == "cvx":
-            lines.extend([
-                "      runtime: docker",
-            ])
+            lines.extend(
+                [
+                    "      runtime: docker",
+                ]
+            )
 
         # Add labels for metadata
-        lines.extend([
-            "      labels:",
-            "        role: spine",
-            f"        loopback: {spine.get('loopback', spine.get('ip', ''))}",
-            f"        asn: \"{spine.get('asn', '')}\"",
-            "",
-        ])
+        lines.extend(
+            [
+                "      labels:",
+                "        role: spine",
+                f'        loopback: "{spine.get("loopback", spine.get("ip", ""))}"',
+                f'        asn: "{spine.get("asn", "")}"',
+                "",
+            ]
+        )
 
     # Add leaf nodes
     for i, leaf in enumerate(leaves):
-        leaf_name = leaf.get("name", f"leaf-{i + 1}")
-        leaf_ip = f"172.20.{mgmt_ip_base}.{ip_counter}"
+        leaf_name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
+        leaf_ip = (
+            str(mgmt_hosts[ip_counter])
+            if ip_counter < len(mgmt_hosts)
+            else f"172.20.20.{ip_counter + 1}"
+        )
         ip_counter += 1
 
-        lines.extend([
-            f"    {leaf_name}:",
-            f"      kind: {kind}",
-            f"      mgmt-ipv4: {leaf_ip}",
-        ])
+        lines.extend(
+            [
+                f"    {leaf_name}:",
+                f"      kind: {kind}",
+                f"      mgmt-ipv4: {leaf_ip}",
+            ]
+        )
 
         if kind in ("ceos", "srl"):
-            lines.extend([
-                "      startup-config: configs/" + leaf_name + ".cfg",
-            ])
+            lines.extend(
+                [
+                    "      startup-config: configs/" + leaf_name + ".cfg",
+                ]
+            )
         elif kind == "cvx":
-            lines.extend([
-                "      runtime: docker",
-            ])
+            lines.extend(
+                [
+                    "      runtime: docker",
+                ]
+            )
 
-        lines.extend([
-            "      labels:",
-            "        role: leaf",
-            f"        loopback: {leaf.get('loopback', leaf.get('ip', ''))}",
-            f"        vtep_ip: {leaf.get('vtep_ip', '')}",
-            f"        asn: \"{leaf.get('asn', '')}\"",
-            "",
-        ])
+        lines.extend(
+            [
+                "      labels:",
+                "        role: leaf",
+                f'        loopback: "{leaf.get("loopback", leaf.get("ip", ""))}"',
+                f'        vtep_ip: "{leaf.get("vtep_ip", "")}"',
+                f'        asn: "{leaf.get("asn", "")}"',
+                "",
+            ]
+        )
 
     # Add host nodes if requested
     if include_hosts:
         for i, leaf in enumerate(leaves):
-            leaf_name = leaf.get("name", f"leaf-{i + 1}")
+            leaf_name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
             for h in range(hosts_per_leaf):
                 host_name = f"host-{i + 1}-{h + 1}" if hosts_per_leaf > 1 else f"host-{i + 1}"
-                host_ip = f"172.20.{mgmt_ip_base}.{ip_counter}"
+                host_ip = (
+                    str(mgmt_hosts[ip_counter])
+                    if ip_counter < len(mgmt_hosts)
+                    else f"172.20.20.{ip_counter + 1}"
+                )
                 ip_counter += 1
 
-                lines.extend([
-                    f"    {host_name}:",
-                    "      kind: linux",
-                    f"      mgmt-ipv4: {host_ip}",
-                    "      exec:",
-                    "        - ip addr add 192.168.10." + str(i * hosts_per_leaf + h + 1) + "/24 dev eth1",
-                    "      labels:",
-                    "        role: host",
-                    f"        connected_to: {leaf_name}",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"    {host_name}:",
+                        "      kind: linux",
+                        f"      mgmt-ipv4: {host_ip}",
+                        "      exec:",
+                        "        - ip addr add 192.168.10."
+                        + str(i * hosts_per_leaf + h + 1)
+                        + "/24 dev eth1",
+                        "      labels:",
+                        "        role: host",
+                        f"        connected_to: {leaf_name}",
+                        "",
+                    ]
+                )
 
     # Add links section
-    lines.extend([
-        "  links:",
-        "    # Spine-Leaf Interconnects",
-    ])
+    lines.extend(
+        [
+            "  links:",
+            "    # Spine-Leaf Interconnects",
+        ]
+    )
 
     # Generate full mesh spine-leaf links
     link_counter = 1
     for i, spine in enumerate(spines):
-        spine_name = spine.get("name", f"spine-{i + 1}")
+        spine_name = _sanitize_name(spine.get("name", f"spine-{i + 1}"))
         for j, leaf in enumerate(leaves):
-            leaf_name = leaf.get("name", f"leaf-{j + 1}")
+            leaf_name = _sanitize_name(leaf.get("name", f"leaf-{j + 1}"))
             # Use eth interfaces, starting from eth1 (eth0 is typically management)
             spine_port = f"eth{j + 1}"  # Each spine connects to all leaves
-            leaf_port = f"eth{i + 1}"   # Each leaf connects to all spines
+            leaf_port = f"eth{i + 1}"  # Each leaf connects to all spines
 
-            lines.extend([
-                f"    - endpoints: [\"{spine_name}:{spine_port}\", \"{leaf_name}:{leaf_port}\"]",
-            ])
+            lines.extend(
+                [
+                    f'    - endpoints: ["{spine_name}:{spine_port}", "{leaf_name}:{leaf_port}"]',
+                ]
+            )
             link_counter += 1
 
     # Add host links if requested
     if include_hosts:
-        lines.extend([
-            "",
-            "    # Host Connections",
-        ])
+        lines.extend(
+            [
+                "",
+                "    # Host Connections",
+            ]
+        )
         for i, leaf in enumerate(leaves):
-            leaf_name = leaf.get("name", f"leaf-{i + 1}")
+            leaf_name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
             for h in range(hosts_per_leaf):
                 host_name = f"host-{i + 1}-{h + 1}" if hosts_per_leaf > 1 else f"host-{i + 1}"
                 # Host connects to leaf on port after spine connections
                 leaf_port = f"eth{len(spines) + h + 1}"
 
-                lines.extend([
-                    f"    - endpoints: [\"{leaf_name}:{leaf_port}\", \"{host_name}:eth1\"]",
-                ])
+                lines.extend(
+                    [
+                        f'    - endpoints: ["{leaf_name}:{leaf_port}", "{host_name}:eth1"]',
+                    ]
+                )
 
     return "\n".join(lines)
 

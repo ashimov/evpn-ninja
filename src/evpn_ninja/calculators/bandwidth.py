@@ -149,6 +149,15 @@ def calculate_bandwidth(
     Returns:
         BandwidthResult with bandwidth analysis
     """
+    if spine_count <= 0:
+        raise ValueError(f"spine_count must be positive, got {spine_count}")
+    if leaf_count <= 0:
+        raise ValueError(f"leaf_count must be positive, got {leaf_count}")
+    if uplink_count_per_leaf <= 0:
+        raise ValueError(f"uplink_count_per_leaf must be positive, got {uplink_count_per_leaf}")
+    if downlink_count_per_leaf <= 0:
+        raise ValueError(f"downlink_count_per_leaf must be positive, got {downlink_count_per_leaf}")
+
     recommendations: list[str] = []
 
     # Calculate leaf bandwidth
@@ -156,12 +165,11 @@ def calculate_bandwidth(
     leaf_downlink_bw = downlink_count_per_leaf * downlink_speed.gbps
 
     # Calculate spine bandwidth
-    # Each spine connects to all leaves
-    spine_total_bw = leaf_count * uplink_speed.gbps
+    # Total uplink bandwidth reaching each spine from all leaves
+    spine_total_bw = (leaf_count * leaf_uplink_bw) / spine_count if spine_count > 0 else 0
 
-    # Bisection bandwidth (total bandwidth available for east-west traffic)
-    # This is the total uplink capacity from all leaves
-    bisection_bw = leaf_count * leaf_uplink_bw
+    # Bisection bandwidth (capacity in one direction across a cut dividing the fabric in half)
+    bisection_bw = (leaf_count * leaf_uplink_bw) / 2
 
     # Oversubscription analysis
     if leaf_uplink_bw >= leaf_downlink_bw:
@@ -190,50 +198,70 @@ def calculate_bandwidth(
     if spine_count > 1:
         remaining_bw = leaf_uplink_bw * (spine_count - 1) / spine_count
         reduction = (1 - (spine_count - 1) / spine_count) * 100
-        failure_scenarios.append(FailureScenario(
-            scenario="Single spine failure",
-            remaining_bandwidth_gbps=remaining_bw,
-            bandwidth_reduction_percent=reduction,
-            still_operational=True,
-            notes=f"Traffic redistributes to {spine_count - 1} remaining spines",
-        ))
+        failure_scenarios.append(
+            FailureScenario(
+                scenario="Single spine failure",
+                remaining_bandwidth_gbps=remaining_bw,
+                bandwidth_reduction_percent=reduction,
+                still_operational=True,
+                notes=f"Traffic redistributes to {spine_count - 1} remaining spines",
+            )
+        )
 
     # Scenario 2: Single uplink failure (per leaf)
     if uplink_count_per_leaf > 1:
         remaining_bw = leaf_uplink_bw * (uplink_count_per_leaf - 1) / uplink_count_per_leaf
         reduction = (1 / uplink_count_per_leaf) * 100
-        failure_scenarios.append(FailureScenario(
-            scenario="Single uplink failure (per leaf)",
-            remaining_bandwidth_gbps=remaining_bw,
-            bandwidth_reduction_percent=reduction,
-            still_operational=True,
-            notes="ECMP redistributes to remaining uplinks",
-        ))
-
-    # Scenario 3: Single leaf failure
-    remaining_bw = bisection_bw * (leaf_count - 1) / leaf_count
-    failure_scenarios.append(FailureScenario(
-        scenario="Single leaf failure",
-        remaining_bandwidth_gbps=remaining_bw,
-        bandwidth_reduction_percent=(1 / leaf_count) * 100,
-        still_operational=True,
-        notes=f"Hosts on failed leaf lose connectivity; {leaf_count - 1} leaves remain",
-    ))
-
-    # Scenario 4: Worst case - spine + uplink failure
-    if spine_count > 1 and uplink_count_per_leaf > 1:
-        # Assuming 1 spine down + 1 uplink down (different spine)
-        remaining_uplinks = uplink_count_per_leaf - 2 if uplink_count_per_leaf > 2 else uplink_count_per_leaf - 1
-        if remaining_uplinks > 0:
-            remaining_bw = uplink_speed.gbps * remaining_uplinks
-            reduction = (1 - remaining_uplinks / uplink_count_per_leaf) * 100
-            failure_scenarios.append(FailureScenario(
-                scenario="Spine + uplink failure (worst case per leaf)",
+        failure_scenarios.append(
+            FailureScenario(
+                scenario="Single uplink failure (per leaf)",
                 remaining_bandwidth_gbps=remaining_bw,
                 bandwidth_reduction_percent=reduction,
                 still_operational=True,
-                notes="Multiple simultaneous failures",
-            ))
+                notes="ECMP redistributes to remaining uplinks",
+            )
+        )
+
+    # Scenario 3: Single leaf failure
+    remaining_bw = bisection_bw * (leaf_count - 1) / leaf_count
+    failure_scenarios.append(
+        FailureScenario(
+            scenario="Single leaf failure",
+            remaining_bandwidth_gbps=remaining_bw,
+            bandwidth_reduction_percent=(1 / leaf_count) * 100,
+            still_operational=True,
+            notes=f"Hosts on failed leaf lose connectivity; {leaf_count - 1} leaves remain",
+        )
+    )
+
+    # Scenario 4: Worst case - spine + uplink failure
+    if spine_count > 1 and uplink_count_per_leaf > 1:
+        # 1 spine down loses its share of uplinks; then 1 more uplink fails
+        uplinks_per_spine_f = uplink_count_per_leaf / spine_count
+        uplinks_lost = uplinks_per_spine_f + 1
+        remaining_uplinks = uplink_count_per_leaf - uplinks_lost
+        if remaining_uplinks > 0:
+            remaining_bw = uplink_speed.gbps * remaining_uplinks
+            reduction = (1 - remaining_uplinks / uplink_count_per_leaf) * 100
+            failure_scenarios.append(
+                FailureScenario(
+                    scenario="Spine + uplink failure (worst case per leaf)",
+                    remaining_bandwidth_gbps=remaining_bw,
+                    bandwidth_reduction_percent=reduction,
+                    still_operational=True,
+                    notes="Multiple simultaneous failures",
+                )
+            )
+        else:
+            failure_scenarios.append(
+                FailureScenario(
+                    scenario="Spine + uplink failure (worst case per leaf)",
+                    remaining_bandwidth_gbps=0,
+                    bandwidth_reduction_percent=100,
+                    still_operational=False,
+                    notes="All uplinks lost - leaf isolated",
+                )
+            )
 
     # Recommendations
     if oversub_ratio > 3:

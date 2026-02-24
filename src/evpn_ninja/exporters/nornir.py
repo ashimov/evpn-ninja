@@ -43,7 +43,7 @@ def export_nornir_inventory(
     hosts: dict[str, Any] = {}
 
     # Add spines
-    for spine in spines:
+    for i, spine in enumerate(spines):
         host_data: dict[str, Any] = {
             "hostname": spine.get("ip", spine.get("loopback", "")),
             "groups": ["spines", "fabric"],
@@ -59,10 +59,11 @@ def export_nornir_inventory(
         if connection_options:
             host_data["connection_options"] = connection_options
 
-        hosts[spine["name"]] = host_data
+        spine_name = spine.get("name", f"spine-{i + 1}")
+        hosts[spine_name] = host_data
 
     # Add leaves
-    for leaf in leaves:
+    for i, leaf in enumerate(leaves):
         host_data = {
             "hostname": leaf.get("ip", leaf.get("loopback", "")),
             "groups": ["leaves", "fabric"],
@@ -80,7 +81,8 @@ def export_nornir_inventory(
         if connection_options:
             host_data["connection_options"] = connection_options
 
-        hosts[leaf["name"]] = host_data
+        leaf_name = leaf.get("name", f"leaf-{i + 1}")
+        hosts[leaf_name] = host_data
 
     return yaml.dump(hosts, default_flow_style=False, sort_keys=False)
 

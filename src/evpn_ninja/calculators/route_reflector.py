@@ -177,7 +177,9 @@ def calculate_route_reflector(
     design_notes: list[str] = []
 
     # Calculate number of clusters
-    if custom_cluster_count:
+    if custom_cluster_count is not None:
+        if custom_cluster_count <= 0:
+            raise ValueError(f"custom_cluster_count must be positive, got {custom_cluster_count}")
         cluster_count = custom_cluster_count
     else:
         cluster_count = _calculate_optimal_cluster_count(client_count)
@@ -213,7 +215,11 @@ def calculate_route_reflector(
             if rr_index < len(rr_hosts):
                 rr_ip = str(rr_hosts[rr_index])
             else:
-                rr_ip = f"10.255.{rr_index // 256}.{rr_index % 256}"
+                # Generate fallback IPs, avoiding network addresses (.0)
+                offset = rr_index - len(rr_hosts)
+                octet3 = offset // 254
+                octet4 = offset % 254 + 1
+                rr_ip = f"10.255.{octet3}.{octet4}"
 
             role = "primary" if member_idx == 0 else "secondary" if member_idx == 1 else "member"
 
@@ -234,11 +240,13 @@ def calculate_route_reflector(
             all_rr_nodes.append(rr_node)
             rr_index += 1
 
-        clusters.append(RRCluster(
-            cluster_id=cluster_id,
-            members=members,
-            client_count=clients_per_cluster,
-        ))
+        clusters.append(
+            RRCluster(
+                cluster_id=cluster_id,
+                members=members,
+                client_count=clients_per_cluster,
+            )
+        )
 
     # Create peer groups
     peer_groups = [
@@ -263,13 +271,15 @@ def calculate_route_reflector(
     ]
 
     # Add design notes
-    design_notes.extend([
-        f"Placement: {placement.value} - {'Recommended for small fabrics' if placement == RRPlacement.SPINE else 'Recommended for large fabrics'}",
-        f"Total BGP sessions: {client_count * rrs_per_cluster} (clients) + {total_rr_nodes * (total_rr_nodes - 1) // 2} (RR mesh)",
-        "All RRs in a cluster share the same cluster-id to prevent routing loops",
-        "EVPN next-hop should NOT be modified by RR (no next-hop-self)",
-        "Extended communities must be preserved for RT/RD",
-    ])
+    design_notes.extend(
+        [
+            f"Placement: {placement.value} - {'Recommended for small fabrics' if placement == RRPlacement.SPINE else 'Recommended for large fabrics'}",
+            f"Total BGP sessions: {clients_per_cluster * rrs_per_cluster * cluster_count} (clients) + {total_rr_nodes * (total_rr_nodes - 1) // 2} (RR mesh)",
+            "All RRs in a cluster share the same cluster-id to prevent routing loops",
+            "EVPN next-hop should NOT be modified by RR (no next-hop-self)",
+            "Extended communities must be preserved for RT/RD",
+        ]
+    )
 
     if client_count > 100 and placement == RRPlacement.SPINE:
         design_notes.append("RECOMMENDATION: Consider dedicated RR nodes for better scalability")

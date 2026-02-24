@@ -13,13 +13,15 @@ MAX_HOSTS_PER_VTEP = 100000
 
 class ReplicationMode(str, Enum):
     """BUM traffic replication mode."""
-    INGRESS = "ingress"      # Head-end replication (unicast)
+
+    INGRESS = "ingress"  # Head-end replication (unicast)
     MULTICAST = "multicast"  # Multicast-based replication
 
 
 @dataclass
 class IPAllocation:
     """IP allocation for a component."""
+
     name: str
     network: str
     addresses: list[str]
@@ -28,6 +30,7 @@ class IPAllocation:
 @dataclass
 class IPOverlapWarning:
     """Warning about IP network overlap."""
+
     network1_name: str
     network1: str
     network2_name: str
@@ -38,6 +41,7 @@ class IPOverlapWarning:
 @dataclass
 class CapacityWarning:
     """Warning about insufficient capacity."""
+
     resource: str
     required: int
     available: int
@@ -47,8 +51,9 @@ class CapacityWarning:
 @dataclass
 class FabricEstimates:
     """Estimated resource requirements."""
+
     total_mac_entries: int
-    mac_entries_per_vtep: int
+    mac_entries_per_vtep: int  # In EVPN, each VTEP learns ALL MACs (local + remote)
     evpn_type2_routes: int
     evpn_type3_routes: int
     evpn_type5_routes: int | None
@@ -60,6 +65,7 @@ class FabricEstimates:
 @dataclass
 class FabricResult:
     """Fabric parameters calculation result."""
+
     vtep_count: int
     spine_count: int
     vni_count: int
@@ -73,12 +79,10 @@ class FabricResult:
     warnings: list[IPOverlapWarning | CapacityWarning] = field(default_factory=list)
 
 
-def _generate_addresses(network: IPv4Network, count: int, skip_network: bool = True) -> list[str]:
+def _generate_addresses(network: IPv4Network, count: int) -> list[str]:
     """Generate a list of host addresses from a network."""
     hosts = list(network.hosts())
-    if skip_network:
-        return [str(hosts[i]) for i in range(min(count, len(hosts)))]
-    return [str(network.network_address + i) for i in range(min(count, network.num_addresses))]
+    return [str(hosts[i]) for i in range(min(count, len(hosts)))]
 
 
 def _check_network_overlap(
@@ -106,7 +110,7 @@ def _check_network_capacity(
     resource_type: str = "addresses",
 ) -> CapacityWarning | None:
     """Check if a network has enough capacity and return a warning if not."""
-    available = network.num_addresses - 2  # Subtract network and broadcast
+    available = sum(1 for _ in network.hosts())  # Handles /31 and /32 correctly
     if available < required:
         return CapacityWarning(
             resource=f"{network_name} {resource_type}",
@@ -151,7 +155,7 @@ def validate_fabric_networks(
     ]
 
     for i, (net1, name1) in enumerate(networks):
-        for net2, name2 in networks[i + 1:]:
+        for net2, name2 in networks[i + 1 :]:
             warning = _check_network_overlap(net1, name1, net2, name2)
             if warning:
                 warnings.append(warning)
@@ -174,21 +178,25 @@ def validate_fabric_networks(
     # Handle edge case where prefixlen >= 31 (no room for /31 subnets)
     if p2p_net.prefixlen >= 31:
         p2p_subnets_available = 0
-        warnings.append(CapacityWarning(
-            resource="P2P /31 subnets",
-            required=p2p_links,
-            available=0,
-            message=f"P2P network ({p2p_net}) prefix length is too large (/{p2p_net.prefixlen}) to create /31 subnets",
-        ))
+        warnings.append(
+            CapacityWarning(
+                resource="P2P /31 subnets",
+                required=p2p_links,
+                available=0,
+                message=f"P2P network ({p2p_net}) prefix length is too large (/{p2p_net.prefixlen}) to create /31 subnets",
+            )
+        )
     else:
         p2p_subnets_available = 2 ** (31 - p2p_net.prefixlen)
         if p2p_subnets_available < p2p_links:
-            warnings.append(CapacityWarning(
-                resource="P2P /31 subnets",
-                required=p2p_links,
-                available=p2p_subnets_available,
-                message=f"P2P network ({p2p_net}) can provide {p2p_subnets_available} /31 subnets, but {p2p_links} required",
-            ))
+            warnings.append(
+                CapacityWarning(
+                    resource="P2P /31 subnets",
+                    required=p2p_links,
+                    available=p2p_subnets_available,
+                    message=f"P2P network ({p2p_net}) can provide {p2p_subnets_available} /31 subnets, but {p2p_links} required",
+                )
+            )
 
     return warnings
 
@@ -274,13 +282,13 @@ def calculate_fabric_params(
 
     # Separate into leaf and spine loopbacks
     leaf_loopbacks = loopback_addrs[:vtep_count]
-    spine_loopbacks = loopback_addrs[vtep_count:vtep_count + spine_count]
+    spine_loopbacks = loopback_addrs[vtep_count : vtep_count + spine_count]
 
     loopback_allocation = IPAllocation(
         name="Router Loopbacks",
         network=loopback_network,
-        addresses=[f"Leaf-{i+1}: {addr}" for i, addr in enumerate(leaf_loopbacks)] +
-                  [f"Spine-{i+1}: {addr}" for i, addr in enumerate(spine_loopbacks)],
+        addresses=[f"Leaf-{i + 1}: {addr}" for i, addr in enumerate(leaf_loopbacks)]
+        + [f"Spine-{i + 1}: {addr}" for i, addr in enumerate(spine_loopbacks)],
     )
 
     # Generate VTEP loopback addresses (for NVE interface)
@@ -288,7 +296,7 @@ def calculate_fabric_params(
     vtep_loopback_allocation = IPAllocation(
         name="VTEP (NVE) Loopbacks",
         network=vtep_loopback_network,
-        addresses=[f"VTEP-{i+1}: {addr}" for i, addr in enumerate(vtep_addrs)],
+        addresses=[f"VTEP-{i + 1}: {addr}" for i, addr in enumerate(vtep_addrs)],
     )
 
     # Generate P2P link addresses
@@ -301,10 +309,11 @@ def calculate_fabric_params(
         for spine_idx in range(spine_count):
             if link_idx < len(p2p_subnets):
                 subnet = p2p_subnets[link_idx]
-                hosts = list(subnet.hosts())
-                if len(hosts) >= 2:
+                # Use list(subnet) instead of subnet.hosts() for /31 support (RFC 3021)
+                addrs = list(subnet)
+                if len(addrs) >= 2:
                     p2p_addresses.append(
-                        f"Leaf-{leaf_idx+1} <-> Spine-{spine_idx+1}: {hosts[0]}/31 - {hosts[1]}/31"
+                        f"Leaf-{leaf_idx + 1} <-> Spine-{spine_idx + 1}: {addrs[0]}/31 - {addrs[1]}/31"
                     )
             link_idx += 1
 

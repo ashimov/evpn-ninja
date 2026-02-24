@@ -6,7 +6,6 @@ from enum import Enum
 from io import StringIO
 from unittest.mock import patch
 
-import pytest
 import yaml
 from rich.console import Console
 
@@ -14,7 +13,6 @@ from evpn_ninja.output import (
     OutputFormat,
     _serialize,
     configure_console,
-    console,
     output_config,
     output_json,
     output_key_value,
@@ -52,13 +50,7 @@ class TestOutputFormatters:
 
     def test_serialize_nested(self):
         """Test serialization of nested structure."""
-        data = {
-            "level1": {
-                "level2": {
-                    "level3": "deep value"
-                }
-            }
-        }
+        data = {"level1": {"level2": {"level3": "deep value"}}}
         result = _serialize(data)
 
         assert result["level1"]["level2"]["level3"] == "deep value"
@@ -73,10 +65,10 @@ class TestOutputFormatters:
 
     def test_serialize_special_characters(self):
         """Test serialization handles special characters."""
-        data = {"message": "Hello \"World\"", "path": "C:\\Users"}
+        data = {"message": 'Hello "World"', "path": "C:\\Users"}
         result = _serialize(data)
 
-        assert result["message"] == "Hello \"World\""
+        assert result["message"] == 'Hello "World"'
         assert result["path"] == "C:\\Users"
 
 
@@ -134,13 +126,7 @@ class TestYAMLSerialization:
 
     def test_yaml_nested_structure(self):
         """Test YAML preserves nested structure."""
-        data = {
-            "level1": {
-                "level2": {
-                    "level3": "deep value"
-                }
-            }
-        }
+        data = {"level1": {"level2": {"level3": "deep value"}}}
         serialized = _serialize(data)
         yaml_str = yaml.dump(serialized)
         parsed = yaml.safe_load(yaml_str)
@@ -153,6 +139,7 @@ class TestSerializeDataclasses:
 
     def test_serialize_simple_dataclass(self) -> None:
         """Test serialization of simple dataclass."""
+
         @dataclass
         class SimpleData:
             name: str
@@ -165,6 +152,7 @@ class TestSerializeDataclasses:
 
     def test_serialize_nested_dataclass(self) -> None:
         """Test serialization of nested dataclass."""
+
         @dataclass
         class Inner:
             x: int
@@ -181,6 +169,7 @@ class TestSerializeDataclasses:
 
     def test_serialize_dataclass_with_list(self) -> None:
         """Test serialization of dataclass containing list."""
+
         @dataclass
         class WithList:
             items: list[str]
@@ -196,6 +185,7 @@ class TestSerializeEnums:
 
     def test_serialize_string_enum(self) -> None:
         """Test serialization of string enum."""
+
         class Color(str, Enum):
             RED = "red"
             BLUE = "blue"
@@ -205,6 +195,7 @@ class TestSerializeEnums:
 
     def test_serialize_int_enum(self) -> None:
         """Test serialization of int enum."""
+
         class Priority(Enum):
             LOW = 1
             HIGH = 10
@@ -214,6 +205,7 @@ class TestSerializeEnums:
 
     def test_serialize_dict_with_enum_values(self) -> None:
         """Test serialization of dict containing enum values."""
+
         class Status(str, Enum):
             ACTIVE = "active"
             INACTIVE = "inactive"

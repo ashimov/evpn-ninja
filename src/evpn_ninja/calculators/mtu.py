@@ -6,6 +6,7 @@ from enum import Enum
 
 class UnderlayType(str, Enum):
     """Underlay network type."""
+
     IPV4 = "ipv4"
     IPV6 = "ipv6"
 
@@ -13,6 +14,7 @@ class UnderlayType(str, Enum):
 @dataclass
 class LayerOverhead:
     """Overhead for a single layer."""
+
     name: str
     size: int
     description: str
@@ -21,6 +23,7 @@ class LayerOverhead:
 @dataclass
 class MTUResult:
     """MTU calculation result."""
+
     payload_size: int
     underlay_type: str
     outer_vlan_tags: int
@@ -34,12 +37,12 @@ class MTUResult:
 
 # Constants for layer sizes
 ETHERNET_HEADER = 14  # Dst MAC (6) + Src MAC (6) + EtherType (2)
-VLAN_TAG = 4          # 802.1Q tag
-IPV4_HEADER = 20      # Standard IPv4 header
-IPV6_HEADER = 40      # Standard IPv6 header
-UDP_HEADER = 8        # UDP header
-VXLAN_HEADER = 8      # VXLAN header
-FCS = 4               # Frame Check Sequence
+VLAN_TAG = 4  # 802.1Q tag
+IPV4_HEADER = 20  # Standard IPv4 header
+IPV6_HEADER = 40  # Standard IPv6 header
+UDP_HEADER = 8  # UDP header
+VXLAN_HEADER = 8  # VXLAN header
+FCS = 4  # Frame Check Sequence
 
 
 def calculate_mtu(
@@ -93,7 +96,9 @@ def calculate_mtu(
         layers.append(LayerOverhead("Outer IPv6", IPV6_HEADER, "Standard IPv6 header"))
 
     # UDP
-    layers.append(LayerOverhead("UDP", UDP_HEADER, "Source port + Dest port (4789) + Length + Checksum"))
+    layers.append(
+        LayerOverhead("UDP", UDP_HEADER, "Source port + Dest port (4789) + Length + Checksum")
+    )
 
     # VXLAN Header
     layers.append(LayerOverhead("VXLAN Header", VXLAN_HEADER, "Flags + Reserved + VNI + Reserved"))
@@ -108,19 +113,23 @@ def calculate_mtu(
     # Inner Payload
     layers.append(LayerOverhead("Inner Payload", payload_size, "Original L3 packet (IP + data)"))
 
+    # FCS (Frame Check Sequence)
+    layers.append(LayerOverhead("FCS", FCS, "Frame Check Sequence"))
+
     # Calculate totals
-    total_overhead = sum(layer.size for layer in layers[:-1])  # Exclude payload
+    total_overhead = sum(layer.size for layer in layers) - payload_size  # Everything except payload
     total_frame_size = sum(layer.size for layer in layers)
 
     # Required MTU is the size that the underlay needs to carry
     # This is from outer IP header to the end of the inner frame
     ip_header_size = IPV4_HEADER if underlay_type == UnderlayType.IPV4 else IPV6_HEADER
     required_mtu = (
-        ip_header_size +
-        UDP_HEADER +
-        VXLAN_HEADER +
-        ETHERNET_HEADER + (inner_vlan_tags * VLAN_TAG) +
-        payload_size
+        ip_header_size
+        + UDP_HEADER
+        + VXLAN_HEADER
+        + ETHERNET_HEADER
+        + (inner_vlan_tags * VLAN_TAG)
+        + payload_size
     )
 
     # Recommended MTU adds some headroom

@@ -186,9 +186,7 @@ class TestConfigFromDict:
                 "multicast": {"scheme": "shared"},
             },
             "output": {"format": "yaml"},
-            "presets": {
-                "test": {"description": "Test preset"}
-            },
+            "presets": {"test": {"description": "Test preset"}},
         }
         config = Config.from_dict(data)
         assert config.mtu.payload_size == 1400

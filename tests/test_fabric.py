@@ -1,7 +1,6 @@
 """Tests for Fabric Parameters calculator."""
 
-import pytest
-from evpn_ninja.calculators.fabric import calculate_fabric_params, ReplicationMode
+from evpn_ninja.calculators.fabric import ReplicationMode, calculate_fabric_params
 
 
 class TestFabricCalculator:

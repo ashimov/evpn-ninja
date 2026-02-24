@@ -10,13 +10,15 @@ from enum import Enum
 
 class MultiHomingMode(str, Enum):
     """Multi-homing redundancy mode."""
-    ACTIVE_ACTIVE = "active-active"      # All-Active: traffic on all links
-    ACTIVE_STANDBY = "active-standby"    # Single-Active: one active link
-    PORT_ACTIVE = "port-active"          # Per-port active (Cisco)
+
+    ACTIVE_ACTIVE = "active-active"  # All-Active: traffic on all links
+    ACTIVE_STANDBY = "active-standby"  # Single-Active: one active link
+    PORT_ACTIVE = "port-active"  # Per-port active (Cisco)
 
 
 class ESIType(str, Enum):
     """ESI type according to RFC 7432."""
+
     TYPE_0 = "type-0"  # Arbitrary 9-octet value
     TYPE_1 = "type-1"  # LACP-based (auto-derived from LACP)
     TYPE_3 = "type-3"  # MAC-based (system MAC + local discriminator)
@@ -24,6 +26,7 @@ class ESIType(str, Enum):
 
 class LACPMode(str, Enum):
     """LACP operational mode."""
+
     ACTIVE = "active"
     PASSIVE = "passive"
 
@@ -31,24 +34,27 @@ class LACPMode(str, Enum):
 @dataclass
 class ESIConfig:
     """Ethernet Segment Identifier configuration."""
-    esi: str                          # Full ESI value (10 bytes in hex)
-    esi_type: str                     # ESI type (0, 1, or 3)
-    short_esi: str                    # Last 3 bytes (common identifier)
-    description: str                  # Human-readable description
+
+    esi: str  # Full ESI value (10 bytes in hex)
+    esi_type: str  # ESI type (0, 1, or 3)
+    short_esi: str  # Last 3 bytes (common identifier)
+    description: str  # Human-readable description
 
 
 @dataclass
 class LACPConfig:
     """LACP configuration for multi-homing."""
-    system_id: str                    # LACP system ID (MAC address)
-    system_priority: int              # LACP system priority
-    port_key: int                     # LACP port key
-    mode: str                         # active/passive
+
+    system_id: str  # LACP system ID (MAC address)
+    system_priority: int  # LACP system priority
+    port_key: int  # LACP port key
+    mode: str  # active/passive
 
 
 @dataclass
 class MultiHomingPeer:
     """Configuration for a multi-homing peer."""
+
     name: str
     loopback_ip: str
     interface: str
@@ -58,18 +64,20 @@ class MultiHomingPeer:
 @dataclass
 class EthernetSegment:
     """Ethernet Segment configuration."""
-    es_id: int                        # Logical ES identifier
-    name: str                         # ES name/description
-    esi_config: ESIConfig             # ESI configuration
-    mode: str                         # active-active/active-standby
-    peers: list[MultiHomingPeer]      # PE switches in this ES
-    df_election: str                  # DF election algorithm
-    es_import_rt: str                 # ES-Import Route Target
+
+    es_id: int  # Logical ES identifier
+    name: str  # ES name/description
+    esi_config: ESIConfig  # ESI configuration
+    mode: str  # active-active/active-standby
+    peers: list[MultiHomingPeer]  # PE switches in this ES
+    df_election: str  # DF election algorithm
+    es_import_rt: str  # ES-Import Route Target
 
 
 @dataclass
 class MultiHomingResult:
     """Multi-homing calculation result."""
+
     ethernet_segments: list[EthernetSegment]
     total_es_count: int
     total_pe_count: int
@@ -100,9 +108,13 @@ def generate_esi_type0(
     if len(prefix_parts) != 3:
         prefix_parts = ["00", "00", "00"]
 
-    # Generate ESI: 00 + prefix (3 bytes) + es_id (5 bytes)
-    es_id_hex = f"{es_id:010x}"  # 5 bytes = 10 hex chars
-    es_id_parts = [es_id_hex[i:i+2] for i in range(0, 10, 2)]
+    # Validate es_id fits in 48 bits (6 bytes)
+    if es_id < 0 or es_id > 0xFFFFFFFFFFFF:
+        raise ValueError(f"es_id must be 0-281474976710655 (48-bit), got {es_id}")
+
+    # Generate ESI: 00 + prefix (3 bytes) + es_id (6 bytes) = 10 bytes per RFC 7432
+    es_id_hex = f"{es_id:012x}"  # 6 bytes = 12 hex chars
+    es_id_parts = [es_id_hex[i : i + 2] for i in range(0, 12, 2)]
 
     esi_parts = ["00"] + prefix_parts + es_id_parts
     esi = ":".join(esi_parts)
@@ -138,9 +150,13 @@ def generate_esi_type1(
     if len(mac_parts) != 6:
         mac_parts = ["00", "00", "00", "00", "00", "01"]
 
+    # Validate port key fits in 2 bytes
+    if lacp_port_key < 0 or lacp_port_key > 0xFFFF:
+        raise ValueError(f"lacp_port_key must be 0-65535 (16-bit), got {lacp_port_key}")
+
     # Port key as 2 bytes
     port_key_hex = f"{lacp_port_key:04x}"
-    port_key_parts = [port_key_hex[i:i+2] for i in range(0, 4, 2)]
+    port_key_parts = [port_key_hex[i : i + 2] for i in range(0, 4, 2)]
 
     # ESI: 01 + MAC (6 bytes) + Port Key (2 bytes) + 00
     esi_parts = ["01"] + mac_parts + port_key_parts + ["00"]
@@ -177,9 +193,15 @@ def generate_esi_type3(
     if len(mac_parts) != 6:
         mac_parts = ["00", "00", "00", "00", "00", "01"]
 
+    # Validate local_discriminator fits in 24 bits (3 bytes)
+    if local_discriminator < 0 or local_discriminator > 0xFFFFFF:
+        raise ValueError(
+            f"local_discriminator must be 0-16777215 (24-bit), got {local_discriminator}"
+        )
+
     # Local discriminator as 3 bytes
     discrim_hex = f"{local_discriminator:06x}"
-    discrim_parts = [discrim_hex[i:i+2] for i in range(0, 6, 2)]
+    discrim_parts = [discrim_hex[i : i + 2] for i in range(0, 6, 2)]
 
     # ESI: 03 + MAC (6 bytes) + Local Discriminator (3 bytes)
     esi_parts = ["03"] + mac_parts + discrim_parts
@@ -198,16 +220,22 @@ def generate_es_import_rt(esi: str) -> str:
     """
     Generate ES-Import Route Target from ESI.
 
-    ES-Import RT is derived from the ESI value (bytes 1-6).
+    Per RFC 7432 Section 7.6, ES-Import RT uses bytes 1-6 of the ESI.
+    For Type-3 ESI, the local discriminator bytes (7-9) are incorporated
+    to ensure uniqueness across segments sharing the same system MAC.
 
     Args:
         esi: Full ESI value
 
     Returns:
-        ES-Import Route Target string
+        ES-Import Route Target string (colon-separated MAC format)
     """
-    # Extract bytes 1-6 from ESI (skip type byte)
     esi_parts = esi.split(":")
+    if len(esi_parts) >= 10 and esi_parts[0] == "03":
+        # Type-3 ESI: incorporate discriminator bytes for uniqueness
+        # Use bytes 4-6 of MAC + 3 bytes of discriminator
+        rt_parts = esi_parts[4:7] + esi_parts[7:10]
+        return ":".join(rt_parts)
     if len(esi_parts) >= 7:
         rt_parts = esi_parts[1:7]
         return ":".join(rt_parts)
@@ -252,6 +280,11 @@ def calculate_multihoming(
     Returns:
         MultiHomingResult with all configurations
     """
+    if es_count <= 0:
+        raise ValueError(f"es_count must be positive, got {es_count}")
+    if peers_per_es <= 0:
+        raise ValueError(f"peers_per_es must be positive, got {peers_per_es}")
+
     ethernet_segments: list[EthernetSegment] = []
     pe_set: set[str] = set()
 
@@ -273,8 +306,22 @@ def calculate_multihoming(
         # Generate peer configurations
         peers: list[MultiHomingPeer] = []
         for peer_idx in range(peers_per_es):
-            pe_name = f"PE-{es_idx * peers_per_es + peer_idx + 1}"
-            pe_loopback = f"{pe_loopback_base}{es_idx * peers_per_es + peer_idx + 1}"
+            pe_number = es_idx * peers_per_es + peer_idx + 1
+            pe_name = f"PE-{pe_number}"
+            # Generate valid IP: increment octets properly when last octet > 254
+            last_octet = pe_number % 254 + 1  # 1-254 range
+            third_octet_offset = pe_number // 254
+            if third_octet_offset > 0:
+                # Parse base and increment third octet
+                base_parts = pe_loopback_base.rstrip(".").split(".")
+                o3 = (
+                    int(base_parts[2]) + third_octet_offset
+                    if len(base_parts) >= 3
+                    else third_octet_offset
+                )
+                pe_loopback = f"{base_parts[0]}.{base_parts[1]}.{o3}.{last_octet}"
+            else:
+                pe_loopback = f"{pe_loopback_base}{pe_number}"
             interface = interface_template.format(es_id=es_id)
 
             lacp_config = LACPConfig(
@@ -284,23 +331,27 @@ def calculate_multihoming(
                 mode=LACPMode.ACTIVE.value,
             )
 
-            peers.append(MultiHomingPeer(
-                name=pe_name,
-                loopback_ip=pe_loopback,
-                interface=interface,
-                lacp_config=lacp_config,
-            ))
+            peers.append(
+                MultiHomingPeer(
+                    name=pe_name,
+                    loopback_ip=pe_loopback,
+                    interface=interface,
+                    lacp_config=lacp_config,
+                )
+            )
             pe_set.add(pe_name)
 
-        ethernet_segments.append(EthernetSegment(
-            es_id=es_id,
-            name=f"ES-{es_id}",
-            esi_config=esi_config,
-            mode=mode.value,
-            peers=peers,
-            df_election=df_algorithm,
-            es_import_rt=es_import_rt,
-        ))
+        ethernet_segments.append(
+            EthernetSegment(
+                es_id=es_id,
+                name=f"ES-{es_id}",
+                esi_config=esi_config,
+                mode=mode.value,
+                peers=peers,
+                df_election=df_algorithm,
+                es_import_rt=es_import_rt,
+            )
+        )
 
     # Generate vendor configs if requested
     vendor_configs: dict[str, str] = {}
@@ -308,17 +359,13 @@ def calculate_multihoming(
         for vendor in vendors:
             vendor_lower = vendor.lower()
             if vendor_lower in ("arista", "eos"):
-                vendor_configs["arista"] = _generate_arista_mh_config(
-                    ethernet_segments, system_mac
-                )
+                vendor_configs["arista"] = _generate_arista_mh_config(ethernet_segments, system_mac)
             elif vendor_lower in ("cisco", "nxos", "cisco_nxos"):
                 vendor_configs["cisco_nxos"] = _generate_nxos_mh_config(
                     ethernet_segments, system_mac
                 )
             elif vendor_lower in ("juniper", "junos"):
-                vendor_configs["juniper"] = _generate_junos_mh_config(
-                    ethernet_segments, system_mac
-                )
+                vendor_configs["juniper"] = _generate_junos_mh_config(ethernet_segments, system_mac)
 
     return MultiHomingResult(
         ethernet_segments=ethernet_segments,
@@ -344,23 +391,27 @@ def _generate_arista_mh_config(
     ]
 
     for es in ethernet_segments:
-        lines.extend([
-            f"! Ethernet Segment: {es.name}",
-            f"interface {es.peers[0].interface if es.peers else 'Port-Channel1'}",
-            f"   description {es.name}",
-            "   evpn ethernet-segment",
-            f"      identifier {es.esi_config.esi.replace(':', ' ')}",
-        ])
+        lines.extend(
+            [
+                f"! Ethernet Segment: {es.name}",
+                f"interface {es.peers[0].interface if es.peers else 'Port-Channel1'}",
+                f"   description {es.name}",
+                "   evpn ethernet-segment",
+                f"      identifier {es.esi_config.esi.replace(':', ' ')}",
+            ]
+        )
 
         if es.mode == "active-active":
-            lines.append("      route-target import " + es.es_import_rt.replace(":", " "))
+            lines.append(f"      route-target import {es.es_import_rt}")
         else:
             lines.append("      designated-forwarder election algorithm preference")
 
-        lines.extend([
-            "   lacp system-id " + system_mac,
-            "!",
-        ])
+        lines.extend(
+            [
+                "   lacp system-id " + system_mac,
+                "!",
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -378,29 +429,35 @@ def _generate_nxos_mh_config(
 
     for es in ethernet_segments:
         esi_parts = es.esi_config.esi.split(":")
-        esi_formatted = ".".join([
-            "".join(esi_parts[0:4]),
-            "".join(esi_parts[4:8]),
-            "".join(esi_parts[8:10]),
-        ])
+        esi_formatted = ".".join(
+            [
+                "".join(esi_parts[0:4]),
+                "".join(esi_parts[4:8]),
+                "".join(esi_parts[8:10]),
+            ]
+        )
 
-        lines.extend([
-            f"  esi {esi_formatted}",
-            f"    multi-homing {es.mode.replace('-', ' ')}",
-            f"    df-election algorithm {es.df_election}",
-            "!",
-        ])
+        lines.extend(
+            [
+                f"  esi {esi_formatted}",
+                f"    multi-homing {es.mode.replace('-', ' ')}",
+                f"    df-election algorithm {es.df_election}",
+                "!",
+            ]
+        )
 
     for es in ethernet_segments:
         interface = es.peers[0].interface if es.peers else "port-channel1"
-        lines.extend([
-            f"interface {interface}",
-            "  switchport",
-            "  switchport mode trunk",
-            f"  evpn ethernet-segment {es.es_id}",
-            f"  lacp system-id {system_mac}",
-            "!",
-        ])
+        lines.extend(
+            [
+                f"interface {interface}",
+                "  switchport",
+                "  switchport mode trunk",
+                f"  evpn ethernet-segment {es.es_id}",
+                f"  lacp system-id {system_mac}",
+                "!",
+            ]
+        )
 
     return "\n".join(lines)
 
@@ -424,20 +481,24 @@ def _generate_junos_mh_config(
             ae_num = interface.replace("Port-Channel", "")
             interface = f"ae{ae_num}"
 
-        lines.extend([
-            f"# Ethernet Segment: {es.name}",
-            f"set interfaces {interface} esi {es.esi_config.esi.replace(':', ':')}",
-        ])
+        lines.extend(
+            [
+                f"# Ethernet Segment: {es.name}",
+                f"set interfaces {interface} esi {es.esi_config.esi.replace(':', ':')}",
+            ]
+        )
 
         if es.mode == "active-active":
             lines.append(f"set interfaces {interface} esi all-active")
         else:
             lines.append(f"set interfaces {interface} esi single-active")
 
-        lines.extend([
-            f"set interfaces {interface} aggregated-ether-options lacp system-id {system_mac}",
-            f"set interfaces {interface} aggregated-ether-options lacp active",
-            "",
-        ])
+        lines.extend(
+            [
+                f"set interfaces {interface} aggregated-ether-options lacp system-id {system_mac}",
+                f"set interfaces {interface} aggregated-ether-options lacp active",
+                "",
+            ]
+        )
 
     return "\n".join(lines)

@@ -60,7 +60,7 @@ def _generate_ascii_topology(
     for i in range(spine_count):
         prefix = " " * spine_spacing if i > 0 else ""
         spine_line_top += prefix + "┌" + "─" * (box_width - 2) + "┐"
-        spine_line_mid += prefix + "│" + f" Spine {i+1} ".center(box_width - 2) + "│"
+        spine_line_mid += prefix + "│" + f" Spine {i + 1} ".center(box_width - 2) + "│"
         spine_line_bot += prefix + "└" + "─" * (box_width - 2) + "┘"
 
     lines.append("  " + spine_line_top)
@@ -93,7 +93,9 @@ def _generate_ascii_topology(
     for i in range(leaf_count):
         prefix = " " * leaf_spacing if i > 0 else ""
         leaf_line_top += prefix + "┌" + "─" * (box_width - 2) + "┐"
-        leaf_line_mid += prefix + "│" + f" Leaf {i+1}  ".center(box_width - 2)[:box_width-2] + "│"
+        leaf_line_mid += (
+            prefix + "│" + f" Leaf {i + 1}  ".center(box_width - 2)[: box_width - 2] + "│"
+        )
         leaf_line_bot += prefix + "└" + "─" * (box_width - 2) + "┘"
 
     lines.append("  " + leaf_line_top)
@@ -102,7 +104,9 @@ def _generate_ascii_topology(
 
     # Summary
     lines.append("")
-    lines.append(f"  Spines: {spine_count}  |  Leaves: {leaf_count}  |  Links: {spine_count * leaf_count}")
+    lines.append(
+        f"  Spines: {spine_count}  |  Leaves: {leaf_count}  |  Links: {spine_count * leaf_count}"
+    )
     lines.append("")
 
     return "\n".join(lines)
@@ -140,13 +144,13 @@ def _generate_graphviz_dot(
     lines.append("    // Spine layer")
     lines.append("    subgraph cluster_spines {")
     lines.append('        label="Spine Layer";')
-    lines.append('        style=dashed;')
-    lines.append('        color=blue;')
+    lines.append("        style=dashed;")
+    lines.append("        color=blue;")
     lines.append("")
 
     for i in range(spine_count):
         lines.append(
-            f'        spine{i+1} [label="Spine {i+1}\\n(BGP RR)", '
+            f'        spine{i + 1} [label="Spine {i + 1}\\n(BGP RR)", '
             f'shape=box, style=filled, fillcolor="lightblue"];'
         )
     lines.append("    }")
@@ -156,13 +160,13 @@ def _generate_graphviz_dot(
     lines.append("    // Leaf layer")
     lines.append("    subgraph cluster_leaves {")
     lines.append('        label="Leaf Layer (VTEPs)";')
-    lines.append('        style=dashed;')
-    lines.append('        color=green;')
+    lines.append("        style=dashed;")
+    lines.append("        color=green;")
     lines.append("")
 
     for i in range(leaf_count):
         lines.append(
-            f'        leaf{i+1} [label="Leaf {i+1}\\n(VTEP)", '
+            f'        leaf{i + 1} [label="Leaf {i + 1}\\n(VTEP)", '
             f'shape=box, style=filled, fillcolor="lightgreen"];'
         )
     lines.append("    }")
@@ -173,15 +177,15 @@ def _generate_graphviz_dot(
     for spine_idx in range(spine_count):
         for leaf_idx in range(leaf_count):
             lines.append(
-                f'    spine{spine_idx+1} -> leaf{leaf_idx+1} '
+                f"    spine{spine_idx + 1} -> leaf{leaf_idx + 1} "
                 f'[dir=none, label="{uplink_speed}", color="darkgray"];'
             )
     lines.append("")
 
     # Rank constraints
     lines.append("    // Rank constraints")
-    spine_list = " ".join([f"spine{i+1}" for i in range(spine_count)])
-    leaf_list = " ".join([f"leaf{i+1}" for i in range(leaf_count)])
+    spine_list = " ".join([f"spine{i + 1}" for i in range(spine_count)])
+    leaf_list = " ".join([f"leaf{i + 1}" for i in range(leaf_count)])
     lines.append(f"    {{ rank=same; {spine_list} }}")
     lines.append(f"    {{ rank=same; {leaf_list} }}")
     lines.append("")
@@ -190,14 +194,16 @@ def _generate_graphviz_dot(
     lines.append("    // Legend")
     lines.append("    subgraph cluster_legend {")
     lines.append('        label="Legend";')
-    lines.append('        style=solid;')
-    lines.append('        color=gray;')
-    lines.append(f'        info [label="Spines: {spine_count}\\n'
-                 f'Leaves: {leaf_count}\\n'
-                 f'Links: {spine_count * leaf_count}\\n'
-                 f'Uplink: {uplink_speed}\\n'
-                 f'Downlink: {downlink_speed}", '
-                 f'shape=note, style=filled, fillcolor="lightyellow"];')
+    lines.append("        style=solid;")
+    lines.append("        color=gray;")
+    lines.append(
+        f'        info [label="Spines: {spine_count}\\n'
+        f"Leaves: {leaf_count}\\n"
+        f"Links: {spine_count * leaf_count}\\n"
+        f"Uplink: {uplink_speed}\\n"
+        f'Downlink: {downlink_speed}", '
+        f'shape=note, style=filled, fillcolor="lightyellow"];'
+    )
     lines.append("    }")
 
     lines.append("}")
@@ -223,10 +229,13 @@ def generate_topology(
     Returns:
         TopologyResult with ASCII and Graphviz representations
     """
+    if spine_count <= 0:
+        raise ValueError(f"spine_count must be positive, got {spine_count}")
+    if leaf_count <= 0:
+        raise ValueError(f"leaf_count must be positive, got {leaf_count}")
+
     ascii_art = _generate_ascii_topology(spine_count, leaf_count)
-    graphviz_dot = _generate_graphviz_dot(
-        spine_count, leaf_count, uplink_speed, downlink_speed
-    )
+    graphviz_dot = _generate_graphviz_dot(spine_count, leaf_count, uplink_speed, downlink_speed)
 
     return TopologyResult(
         spine_count=spine_count,

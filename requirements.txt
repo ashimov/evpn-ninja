@@ -1,0 +1,12 @@
+typer==0.21.1
+rich==14.2.0
+questionary==2.1.1
+PyYAML==6.0.3
+click==8.3.1
+typing_extensions==4.15.0
+shellingham==1.5.4
+markdown-it-py==4.0.0
+Pygments==2.19.2
+prompt_toolkit==3.0.52
+mdurl==0.1.2
+wcwidth==0.2.14

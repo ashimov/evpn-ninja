@@ -42,8 +42,12 @@ presets:
 ```
 """
 
+import dataclasses
+import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -116,9 +120,22 @@ class VNIDefaults:
         """Validate VNI defaults."""
         _validate_positive(self.base_vni, "base_vni")
         _validate_range(self.base_vni, "base_vni", 1, 16777215)
-        _validate_choice(self.scheme, "scheme", ["vlan-based", "tenant-based", "flat", "hierarchical"])
+        _validate_choice(
+            self.scheme, "scheme", ["vlan-based", "tenant-based", "sequential", "custom"]
+        )
         _validate_range(self.start_vlan, "start_vlan", 1, 4094)
         _validate_positive(self.count, "count")
+        # Validate multicast_base is a valid multicast address
+        try:
+            addr = IPv4Address(self.multicast_base)
+        except ValueError as e:
+            raise ConfigValidationError(
+                f"multicast_base must be a valid IPv4 address, got {self.multicast_base}"
+            ) from e
+        if not addr.is_multicast:
+            raise ConfigValidationError(
+                f"multicast_base must be in multicast range (224.0.0.0-239.255.255.255), got {self.multicast_base}"
+            )
 
 
 @dataclass
@@ -171,7 +188,7 @@ class EBGPDefaults:
         """Validate eBGP defaults."""
         _validate_positive(self.spine_count, "spine_count")
         _validate_positive(self.leaf_count, "leaf_count")
-        _validate_choice(self.scheme, "scheme", ["private-2byte", "private-4byte", "public", "custom"])
+        _validate_choice(self.scheme, "scheme", ["private-2byte", "private-4byte", "custom"])
 
 
 @dataclass
@@ -188,7 +205,7 @@ class MulticastDefaults:
         """Validate Multicast defaults."""
         _validate_positive(self.vni_start, "vni_start")
         _validate_positive(self.vni_count, "vni_count")
-        _validate_choice(self.scheme, "scheme", ["one-to-one", "shared", "range"])
+        _validate_choice(self.scheme, "scheme", ["one-to-one", "shared", "range-based"])
         _validate_positive(self.vnis_per_group, "vnis_per_group")
 
 
@@ -239,9 +256,19 @@ class Config:
         defaults = data.get("defaults", {})
 
         # Helper to safely create dataclass with type validation
-        def safe_create(dataclass_type: type[_T], section_data: dict[str, Any], section_name: str) -> _T:
+        def safe_create(
+            dataclass_type: type[_T], section_data: dict[str, Any], section_name: str
+        ) -> _T:
+            valid_fields = {f.name for f in dataclasses.fields(dataclass_type)}  # type: ignore[arg-type]
+            unknown_keys = set(section_data) - valid_fields
+            if unknown_keys:
+                print(
+                    f"Warning: Unknown keys in '{section_name}' (ignored): {unknown_keys}",
+                    file=sys.stderr,
+                )
+            filtered_data = {k: v for k, v in section_data.items() if k in valid_fields}
             try:
-                return dataclass_type(**section_data)
+                return dataclass_type(**filtered_data)
             except (TypeError, ConfigValidationError) as e:
                 print(f"Warning: Invalid configuration in '{section_name}': {e}", file=sys.stderr)
                 print(f"Using default values for '{section_name}'.", file=sys.stderr)
@@ -258,13 +285,17 @@ class Config:
         if "ebgp" in defaults and isinstance(defaults["ebgp"], dict):
             config.ebgp = safe_create(EBGPDefaults, defaults["ebgp"], "defaults.ebgp")
         if "multicast" in defaults and isinstance(defaults["multicast"], dict):
-            config.multicast = safe_create(MulticastDefaults, defaults["multicast"], "defaults.multicast")
+            config.multicast = safe_create(
+                MulticastDefaults, defaults["multicast"], "defaults.multicast"
+            )
 
         if "output" in data and isinstance(data["output"], dict):
             config.output = safe_create(OutputSettings, data["output"], "output")
 
-        if "presets" in data:
+        if "presets" in data and isinstance(data["presets"], dict):
             for name, preset_data in data["presets"].items():
+                if not isinstance(preset_data, dict):
+                    continue
                 config.presets[name] = Preset(
                     name=name,
                     description=preset_data.get("description", ""),
@@ -381,9 +412,27 @@ def save_config(config: Config, path: Path | None = None) -> None:
                 "multicast": preset.multicast,
             }
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: write to temp file then rename to avoid corruption
+        fd, tmp_path = tempfile.mkstemp(
+            dir=config_path.parent, suffix=".tmp", prefix=".evpn-ninja-"
+        )
+        tmp_file = Path(tmp_path)
+        try:
+            os.close(fd)
+            with tmp_file.open("w") as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            tmp_file.replace(config_path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+    except PermissionError:
+        print(f"Error: Permission denied writing to {config_path}", file=sys.stderr)
+        raise
+    except OSError as e:
+        print(f"Error: Cannot write config file {config_path}: {e}", file=sys.stderr)
+        raise
 
 
 def load_params_from_file(path: Path) -> dict[str, Any]:

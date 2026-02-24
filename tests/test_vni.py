@@ -1,6 +1,5 @@
 """Tests for VNI calculator."""
 
-import pytest
 from evpn_ninja.calculators.vni import (
     VNIScheme,
     calculate_vni_allocation,
@@ -32,7 +31,7 @@ class TestVNICalculator:
             count=3,
         )
 
-        # VNI = base_vni + vlan_id
+        # Formula: base_vni plus vlan_id
         assert result.entries[0].vni_decimal == 10100
         assert result.entries[1].vni_decimal == 10101
         assert result.entries[2].vni_decimal == 10102
@@ -46,7 +45,7 @@ class TestVNICalculator:
             count=3,
         )
 
-        # VNI = tenant_id * 10000 + vlan_id
+        # Formula: tenant_id times 10000 plus vlan_id
         assert result.entries[0].vni_decimal == 50010
         assert result.entries[1].vni_decimal == 50011
         assert result.entries[2].vni_decimal == 50012
@@ -60,7 +59,7 @@ class TestVNICalculator:
             count=3,
         )
 
-        # VNI = base_vni + index
+        # Formula: base_vni plus index
         assert result.entries[0].vni_decimal == 20000
         assert result.entries[1].vni_decimal == 20001
         assert result.entries[2].vni_decimal == 20002

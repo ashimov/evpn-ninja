@@ -1,6 +1,7 @@
 """Tests for exporter modules."""
 
 import json
+import defusedxml.ElementTree as ET
 from typing import Any
 
 import pytest
@@ -50,8 +51,20 @@ def sample_spines() -> list[dict[str, Any]]:
 def sample_leaves() -> list[dict[str, Any]]:
     """Sample leaf data."""
     return [
-        {"name": "leaf-1", "ip": "10.0.1.1", "loopback": "10.0.1.1", "vtep_ip": "10.0.2.1", "asn": 65001},
-        {"name": "leaf-2", "ip": "10.0.1.2", "loopback": "10.0.1.2", "vtep_ip": "10.0.2.2", "asn": 65002},
+        {
+            "name": "leaf-1",
+            "ip": "10.0.1.1",
+            "loopback": "10.0.1.1",
+            "vtep_ip": "10.0.2.1",
+            "asn": 65001,
+        },
+        {
+            "name": "leaf-2",
+            "ip": "10.0.1.2",
+            "loopback": "10.0.1.2",
+            "vtep_ip": "10.0.2.2",
+            "asn": 65002,
+        },
     ]
 
 
@@ -174,6 +187,26 @@ class TestAnsibleExporter:
         assert vars_data["evpn"]["l3_vni"] == 50000
         assert vars_data["evpn"]["vrf"] == "TENANT-1"
 
+    def test_export_ansible_inventory_missing_name_key(self) -> None:
+        """Test Ansible inventory handles dicts without 'name' key."""
+        spines = [{"ip": "10.0.0.1", "asn": 65000}]
+        leaves = [{"ip": "10.0.1.1", "asn": 65001}]
+        result = export_ansible_inventory(spines, leaves)
+        inventory = yaml.safe_load(result)
+
+        spine_hosts = inventory["all"]["children"]["fabric"]["children"]["spines"]["hosts"]
+        leaf_hosts = inventory["all"]["children"]["fabric"]["children"]["leaves"]["hosts"]
+        assert "spine-1" in spine_hosts
+        assert "leaf-1" in leaf_hosts
+
+    def test_export_ansible_inventory_bgp_as_zero(self) -> None:
+        """Test Ansible inventory includes bgp_as=0 (falsy but valid)."""
+        spines = [{"name": "s1", "ip": "10.0.0.1"}]
+        leaves = [{"name": "l1", "ip": "10.0.1.1"}]
+        result = export_ansible_inventory(spines, leaves, bgp_as=0)
+        inventory = yaml.safe_load(result)
+        assert inventory["all"]["children"]["fabric"]["vars"]["bgp_as"] == 0
+
     def test_generate_ansible_playbook_template(self) -> None:
         """Test Ansible playbook template generation."""
         result = generate_ansible_playbook_template()
@@ -245,9 +278,7 @@ class TestContainerlabExporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test Containerlab topology for SR Linux."""
-        result = export_containerlab_topology(
-            sample_spines, sample_leaves, platform="srlinux"
-        )
+        result = export_containerlab_topology(sample_spines, sample_leaves, platform="srlinux")
 
         assert "kind: srl" in result
 
@@ -274,9 +305,7 @@ class TestContainerlabExporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test Containerlab SR Linux config generation."""
-        configs = generate_containerlab_configs(
-            sample_spines, sample_leaves, platform="srlinux"
-        )
+        configs = generate_containerlab_configs(sample_spines, sample_leaves, platform="srlinux")
 
         assert "spine-1" in configs
         assert "set / system name host-name spine-1" in configs["spine-1"]
@@ -331,9 +360,7 @@ class TestEveGns3Exporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test EVE-NG topology with hosts."""
-        result = export_eve_ng_topology(
-            sample_spines, sample_leaves, include_hosts=True
-        )
+        result = export_eve_ng_topology(sample_spines, sample_leaves, include_hosts=True)
 
         assert 'name="host-1"' in result
         assert 'name="host-2"' in result
@@ -372,9 +399,7 @@ class TestEveGns3Exporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test GNS3 topology with hosts."""
-        result = export_gns3_topology(
-            sample_spines, sample_leaves, include_hosts=True
-        )
+        result = export_gns3_topology(sample_spines, sample_leaves, include_hosts=True)
 
         project = json.loads(result)
         node_names = [n["name"] for n in project["topology"]["nodes"]]
@@ -386,9 +411,7 @@ class TestEveGns3Exporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test EVE-NG startup script generation."""
-        configs = generate_eve_ng_startup_scripts(
-            sample_spines, sample_leaves, platform="eos"
-        )
+        configs = generate_eve_ng_startup_scripts(sample_spines, sample_leaves, platform="eos")
 
         # Check configs exist
         assert "spine-1" in configs
@@ -402,13 +425,41 @@ class TestEveGns3Exporter:
         self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
     ) -> None:
         """Test EVE-NG startup scripts for NX-OS."""
-        configs = generate_eve_ng_startup_scripts(
-            sample_spines, sample_leaves, platform="nxos"
-        )
+        configs = generate_eve_ng_startup_scripts(sample_spines, sample_leaves, platform="nxos")
 
         assert "spine-1" in configs
         assert "hostname spine-1" in configs["spine-1"]
         assert "loopback0" in configs["spine-1"]  # NX-OS uses lowercase
+
+    def test_eve_ng_topology_is_valid_xml(
+        self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
+    ) -> None:
+        """Test EVE-NG topology output is valid XML."""
+        result = export_eve_ng_topology(
+            sample_spines, sample_leaves, lab_name="Test_Lab", platform="eos"
+        )
+        # Should parse without error
+        root = ET.fromstring(result)
+        assert root.tag == "lab"
+        assert root.attrib["name"] == "Test_Lab"
+
+    def test_eve_ng_topology_xml_escaping(self) -> None:
+        """Test EVE-NG topology escapes special XML characters."""
+        spines = [{"name": 'spine<1>&"test'}]
+        leaves = [{"name": 'leaf<2>&"test'}]
+        result = export_eve_ng_topology(spines, leaves, lab_name='Lab"<>&', platform="eos")
+        # Must parse as valid XML
+        root = ET.fromstring(result)
+        assert root.tag == "lab"
+
+    def test_gns3_topology_unique_console_ports(
+        self, sample_spines: list[dict[str, Any]], sample_leaves: list[dict[str, Any]]
+    ) -> None:
+        """Test GNS3 topology assigns unique console ports."""
+        result = export_gns3_topology(sample_spines, sample_leaves, include_hosts=True)
+        project = json.loads(result)
+        ports = [n["console"] for n in project["topology"]["nodes"]]
+        assert len(ports) == len(set(ports)), f"Duplicate console ports found: {ports}"
 
 
 # ============================================================================
@@ -441,9 +492,7 @@ class TestNornirExporter:
         """Test Nornir inventory with connection options."""
         conn_opts = {"netmiko": {"extras": {"device_type": "arista_eos"}}}
 
-        result = export_nornir_inventory(
-            sample_spines, sample_leaves, connection_options=conn_opts
-        )
+        result = export_nornir_inventory(sample_spines, sample_leaves, connection_options=conn_opts)
         hosts = yaml.safe_load(result)
 
         assert hosts["spine-1"]["connection_options"] == conn_opts
@@ -474,9 +523,7 @@ class TestNornirExporter:
 
     def test_export_nornir_defaults(self) -> None:
         """Test Nornir defaults generation."""
-        result = export_nornir_defaults(
-            username="admin", platform="eos", port=22
-        )
+        result = export_nornir_defaults(username="admin", platform="eos", port=22)
         defaults = yaml.safe_load(result)
 
         assert defaults["username"] == "admin"
@@ -511,6 +558,16 @@ class TestNornirExporter:
         assert "SimpleInventory" in result
         assert "host_file:" in result
         assert "runner:" in result
+
+    def test_export_nornir_inventory_missing_name_key(self) -> None:
+        """Test Nornir inventory handles dicts without 'name' key."""
+        spines = [{"ip": "10.0.0.1", "asn": 65000}]
+        leaves = [{"ip": "10.0.1.1", "asn": 65001}]
+        result = export_nornir_inventory(spines, leaves)
+        hosts = yaml.safe_load(result)
+
+        assert "spine-1" in hosts
+        assert "leaf-1" in hosts
 
     def test_generate_nornir_script_template(self) -> None:
         """Test Nornir script template generation."""

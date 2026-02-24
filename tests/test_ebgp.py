@@ -1,13 +1,12 @@
 """Tests for eBGP Underlay calculator."""
 
-import pytest
 from evpn_ninja.calculators.ebgp import (
+    PRIVATE_2BYTE_END,
+    PRIVATE_2BYTE_START,
+    PRIVATE_4BYTE_END,
+    PRIVATE_4BYTE_START,
     ASNScheme,
     calculate_ebgp_underlay,
-    PRIVATE_2BYTE_START,
-    PRIVATE_2BYTE_END,
-    PRIVATE_4BYTE_START,
-    PRIVATE_4BYTE_END,
 )
 
 

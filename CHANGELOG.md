@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-02-24
+
+### Added
+
+- **Comprehensive Input Validation Across All Calculators**
+  - Bandwidth: spine_count, leaf_count, uplink/downlink counts must be positive
+  - eBGP: spine_count, leaf_count validation; P2P address space exhaustion check
+  - EVPN: bgp_as (1-4294967295), l2_vni/l3_vni (1-16777215), vlan_id (1-4094) range checks; l3_vni/vrf_name mutual requirement
+  - Multicast: vni_count positive, vni_start range (1-16777215), VNI range overflow detection (vni_start + vni_count > 16777215)
+  - Multihoming: LACP port key 16-bit overflow (0-65535), ESI Type-0 48-bit overflow, Type-3 24-bit overflow, es_count/peers_per_es positive
+  - Route Reflector: custom_cluster_count positive if provided
+  - Topology: spine_count, leaf_count positive
+  - VNI: count positive
+  - Config: multicast_base validated as IPv4 multicast address (224.0.0.0-239.255.255.255)
+
+- **Exporter Safety Improvements**
+  - Node name collision detection in all three exporters (Containerlab, EVE-NG, GNS3), including host nodes
+  - Containerlab: `_sanitize_name()` function to prevent YAML injection via node names
+  - Containerlab: management network capacity validation using `IPv4Network.hosts()`
+  - CLI: proper error on loopback/VTEP network exhaustion instead of silent fallback to hardcoded IPs
+
+- **Shared Multicast Utility Module** (`_multicast_utils.py`)
+  - Extracted duplicate `_calculate_multicast_group` from vni.py and multicast.py into shared module
+  - Enhanced with multicast range validation (224.0.0.0-239.255.255.255)
+
+- **CI/CD Improvements**
+  - Dedicated lint job in CI (ruff check, ruff format, mypy)
+  - Test coverage enforcement (70% minimum via `--cov-fail-under=70`)
+  - `workflow_call` trigger on ci.yml for reusable workflows
+  - CI gate job in publish.yml (runs full CI before publishing)
+  - Manual `workflow_dispatch` ref input for publish.yml
+  - GitHub Actions pinned to commit SHAs for supply chain security
+
+- **Snyk Integration**
+  - `requirements.txt` and `requirements-dev.txt` with pinned versions for Snyk Open Source scanning
+  - `.snyk.env` for VS Code extension environment configuration
+  - `defusedxml` added to dev dependencies for secure XML parsing in tests
+
+- **Expanded Public API**
+  - Exported `generate_ansible_playbook_template`, `export_nornir_groups`, `generate_nornir_config`, `generate_nornir_script_template` from exporters package
+
+- **Interactive Mode Validation**
+  - IPv4, multicast address, and CIDR format validators for interactive input
+  - Graceful cancellation handling (Ctrl+C) throughout questionary prompts
+
+### Fixed
+
+- **Bandwidth Calculator**
+  - Spine total bandwidth now correctly distributes load across spines (`leaf_count * leaf_uplink_bw / spine_count`)
+  - Bisection bandwidth corrected to half-cut model (`leaf_count * leaf_uplink_bw / 2`)
+  - Worst-case failure scenario now properly calculates uplinks lost per spine
+  - ZeroDivisionError on zero spine/leaf/uplink/downlink counts
+
+- **eBGP Calculator**
+  - P2P link addressing now supports RFC 3021 /31 networks (uses `list(subnet)` instead of `subnet.hosts()`)
+  - `base_asn=0` no longer silently skipped due to truthiness fix
+
+- **EVPN Calculator**
+  - L3 VNI vendor configs now correctly generated when `l3_vni=0` (truthiness fix)
+
+- **Fabric Calculator**
+  - Network capacity calculation correct for /31 and /32 networks
+  - P2P /31 subnet generation uses RFC 3021 addressing
+
+- **Multicast Calculator**
+  - Groups used count calculated correctly upfront for SHARED and RANGE_BASED schemes
+
+- **Multihoming Calculator**
+  - ESI Type-0 format corrected to exactly 10 bytes per RFC 7432 (was generating 9 bytes)
+  - ES-Import Route Target for Type-3 ESI now incorporates local discriminator bytes for uniqueness
+  - PE loopback IP generation handles octet overflow (>254) by incrementing third octet
+
+- **Route Reflector Calculator**
+  - `custom_cluster_count=1` no longer ignored (truthiness fix: `if value:` -> `if value is not None:`)
+  - Fallback IP generation avoids .0 network addresses
+  - Total BGP sessions in design notes corrected to `clients_per_cluster * rrs_per_cluster * cluster_count`
+
+- **Containerlab Exporter**
+  - NXOS kind mapping corrected to `cisco_nxos9000v`
+  - Host node names now included in collision detection
+
+- **Ansible Exporter**
+  - `None` values filtered from EVPN/fabric/VNI output instead of being written as `null`
+  - Zero values (`bgp_as=0`, `asn=0`, `l3_vni=0`) no longer dropped from output
+  - Spine/leaf nodes with missing `name` key get fallback names instead of KeyError
+
+- **Config Module**
+  - Unknown config keys now warned and filtered instead of causing instantiation errors
+  - VNI scheme allowlist corrected (`sequential` not `flat`/`hierarchical`)
+  - eBGP scheme allowlist corrected (removed invalid `public`)
+  - Multicast scheme allowlist corrected (`range-based` not `range`)
+  - Atomic file writes for `save_config` using tempfile + rename pattern
+  - `import os` added (was missing — `os.close(fd)` in atomic writes would have failed)
+
+- **CLI**
+  - `_list_presets_callback` now respects `--config` parameter
+  - Loopback/VTEP network exhaustion raises proper error instead of silent fallback
+
+- **Tests**
+  - Symlink traversal test skipped on Windows (`sys.platform == "win32"`)
+  - XML parsing in test_exporters.py switched from `xml.etree.ElementTree` to `defusedxml.ElementTree`
+
+### Changed
+
+- Project status upgraded from "4 - Beta" to "5 - Production/Stable"
+- Comprehensive code formatting with Ruff across all modules
+- 439 unit tests (up from 340+ in v1.0.0)
+
 ## [1.0.1] - 2026-01-16
 
 ### Added
@@ -110,6 +218,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mypy strict type checking
 - 340+ unit tests
 
-[Unreleased]: https://github.com/ashimov/evpn-ninja/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/ashimov/evpn-ninja/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/ashimov/evpn-ninja/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/ashimov/evpn-ninja/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/ashimov/evpn-ninja/releases/tag/v1.0.0
