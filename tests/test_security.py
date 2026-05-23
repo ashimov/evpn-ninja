@@ -307,3 +307,129 @@ class TestConfigTypeValidation:
         config = Config.from_dict(data)
         # Should use default
         assert config.mtu.payload_size == 1500
+
+
+class TestExportResourceLimits:
+    """Test that export bounds counts and does not materialize huge host lists."""
+
+    def test_export_rejects_excessive_spines(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            app,
+            ["export", "ansible", "--spines", str(MAX_SPINE_COUNT + 1), "--leaves", "2"],
+        )
+        assert result.exit_code == 1
+        assert "spines must be <=" in result.stdout
+
+    def test_export_rejects_excessive_leaves(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            app,
+            ["export", "ansible", "--spines", "2", "--leaves", str(MAX_VTEP_COUNT + 1)],
+        )
+        assert result.exit_code == 1
+        assert "leaves must be <=" in result.stdout
+
+    def test_export_rejects_nonpositive_counts(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            app,
+            ["export", "ansible", "--spines", "0", "--leaves", "2"],
+        )
+        assert result.exit_code == 1
+        assert "positive" in result.stdout
+
+    def test_export_large_cidr_does_not_exhaust_memory(self, tmp_path: Path, monkeypatch):
+        """A /8 loopback network must not materialize ~16M host objects."""
+        monkeypatch.chdir(tmp_path)
+        output_dir = tmp_path / "out"
+        result = runner.invoke(
+            app,
+            [
+                "export",
+                "ansible",
+                "--spines",
+                "2",
+                "--leaves",
+                "4",
+                "--loopback-net",
+                "10.0.0.0/8",
+                "--vtep-net",
+                "11.0.0.0/8",
+                "--output-dir",
+                str(output_dir),
+            ],
+        )
+        assert result.exit_code == 0
+        assert (output_dir / "ansible" / "inventory.yaml").exists()
+
+
+class TestExporterInjection:
+    """Test that manually-built exporter output sanitizes untrusted fields."""
+
+    def test_containerlab_unknown_platform_sanitized(self):
+        """A malicious platform string must not inject YAML structure."""
+        from evpn_ninja.exporters.containerlab import export_containerlab_topology
+
+        spines = [{"name": "spine-1", "ip": "10.0.0.1", "asn": 65000}]
+        leaves = [{"name": "leaf-1", "ip": "10.0.0.2", "vtep_ip": "10.0.1.1", "asn": 65001}]
+        result = export_containerlab_topology(spines, leaves, platform="evil\n    injected: true")
+        assert "injected: true" not in result
+
+    def test_containerlab_config_name_sanitized(self):
+        """Newlines in a node name must not inject device-config lines."""
+        from evpn_ninja.exporters.containerlab import generate_containerlab_configs
+
+        spines = [{"name": "spine-1\nmalicious command", "ip": "10.0.0.1", "asn": 65000}]
+        configs = generate_containerlab_configs(spines, [], platform="eos")
+        assert all("\nmalicious command" not in cfg for cfg in configs.values())
+        assert all("\n" not in name for name in configs)
+
+    def test_eve_ng_startup_name_sanitized(self):
+        """Newlines in a node name must not inject startup-config lines."""
+        from evpn_ninja.exporters.eve_gns3 import generate_eve_ng_startup_scripts
+
+        spines = [{"name": "spine-1\ninjected", "loopback": "10.0.0.1"}]
+        configs = generate_eve_ng_startup_scripts(spines, [], platform="eos")
+        assert all("\n" not in name for name in configs)
+
+
+class TestMultihomingFormatStringSafety:
+    """Test that interface_template cannot be abused as a format string."""
+
+    def test_format_string_attack_is_inert(self):
+        from evpn_ninja.calculators.multihoming import (
+            ESIType,
+            MultiHomingMode,
+            calculate_multihoming,
+        )
+
+        # With str.format() this would traverse to globals and raise/leak; with
+        # literal replacement it is treated as a harmless literal.
+        result = calculate_multihoming(
+            es_count=1,
+            peers_per_es=1,
+            mode=MultiHomingMode.ACTIVE_ACTIVE,
+            esi_type=ESIType.TYPE_1,
+            interface_template="{es_id.__class__.__init__.__globals__}",
+        )
+        iface = result.ethernet_segments[0].peers[0].interface
+        assert iface == "{es_id.__class__.__init__.__globals__}"
+
+    def test_normal_template_substitution_works(self):
+        from evpn_ninja.calculators.multihoming import (
+            ESIType,
+            MultiHomingMode,
+            calculate_multihoming,
+        )
+
+        result = calculate_multihoming(
+            es_count=1,
+            peers_per_es=1,
+            mode=MultiHomingMode.ACTIVE_ACTIVE,
+            esi_type=ESIType.TYPE_1,
+            interface_template="Port-Channel{es_id}",
+        )
+        iface = result.ethernet_segments[0].peers[0].interface
+        assert iface.startswith("Port-Channel")
+        assert "{es_id}" not in iface

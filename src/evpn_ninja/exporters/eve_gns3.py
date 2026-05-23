@@ -8,6 +8,8 @@ import uuid
 from html import escape as html_escape
 from typing import Any, cast
 
+from evpn_ninja.exporters.containerlab import _sanitize_name
+
 # EVE-NG node templates for different platforms
 EVE_TEMPLATES = {
     "eos": "veos",
@@ -517,7 +519,7 @@ def generate_eve_ng_startup_scripts(
     # For now, just return placeholder configs
     # In a real implementation, these would be full configs
     for i, spine in enumerate(spines):
-        name = spine.get("name", f"spine-{i + 1}")
+        name = _sanitize_name(spine.get("name", f"spine-{i + 1}"))
         loopback = spine.get("loopback", spine.get("ip", f"10.0.0.{i + 1}"))
 
         if platform in ("eos", "arista"):
@@ -536,7 +538,7 @@ interface loopback0
 """
 
     for i, leaf in enumerate(leaves):
-        name = leaf.get("name", f"leaf-{i + 1}")
+        name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
         loopback = leaf.get("loopback", leaf.get("ip", f"10.0.0.{len(spines) + i + 1}"))
         vtep_ip = leaf.get("vtep_ip", f"10.0.1.{i + 1}")
 

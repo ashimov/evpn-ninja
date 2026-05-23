@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-05-24
+
+### Security
+
+- **Removed `.snyk.env` from version control** and broadened `.gitignore` (`*.env`, `.snyk.env`) to prevent committing local environment files.
+- **Hardened export output generation against injection (defense-in-depth)**
+  - Containerlab: the platform-derived `kind` is now sanitized before YAML interpolation, so an unknown platform string cannot inject YAML structure.
+  - Containerlab and EVE-NG device-config generators now sanitize node names before embedding them in generated device configs.
+- **Format-string hardening**: multi-homing interface naming uses literal substitution instead of `str.format()`, preventing format-string abuse of a caller-supplied template.
+
+### Fixed
+
+- **`export` resource limits (CWE-400)**: `--spines`/`--leaves` are now bounded and host IPs are materialized lazily, so a large CIDR (e.g. `/8`) can no longer exhaust memory.
+- **`export` network parsing**: loopback/VTEP networks are parsed with `strict=False` to match CLI validation, avoiding an uncaught error when an address has host bits set.
+
 ## [1.0.3] - 2026-02-24
 
 ### Fixed

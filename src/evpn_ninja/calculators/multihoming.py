@@ -322,7 +322,10 @@ def calculate_multihoming(
                 pe_loopback = f"{base_parts[0]}.{base_parts[1]}.{o3}.{last_octet}"
             else:
                 pe_loopback = f"{pe_loopback_base}{pe_number}"
-            interface = interface_template.format(es_id=es_id)
+            # Literal substitution instead of str.format() so a caller-supplied
+            # template cannot be abused for a format-string attack (e.g.
+            # "{es_id.__class__.__init__.__globals__}").
+            interface = interface_template.replace("{es_id}", str(es_id))
 
             lacp_config = LACPConfig(
                 system_id=system_mac,

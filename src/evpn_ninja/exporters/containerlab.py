@@ -76,7 +76,10 @@ def export_containerlab_topology(
         Containerlab topology as YAML string
     """
     lab_name = _sanitize_name(lab_name)
-    kind = CLAB_KINDS.get(platform, platform)
+    # Sanitize the platform-derived kind: unknown platforms fall through as a raw
+    # string that is interpolated directly into the YAML, so a value containing
+    # newlines/colons could otherwise inject structure (A03 Injection).
+    kind = _sanitize_name(CLAB_KINDS.get(platform, platform))
     image = CLAB_IMAGES.get(kind, f"{kind}:latest")
 
     lines = [
@@ -329,7 +332,7 @@ def generate_containerlab_configs(
     if platform in ("eos", "arista"):
         # Generate Arista EOS configs
         for i, spine in enumerate(spines):
-            name = spine.get("name", f"spine-{i + 1}")
+            name = _sanitize_name(spine.get("name", f"spine-{i + 1}"))
             loopback = spine.get("loopback", spine.get("ip", f"10.0.0.{i + 1}"))
             asn = spine.get("asn", bgp_as)
 
@@ -362,7 +365,7 @@ router bgp {asn}
             configs[name] = config
 
         for i, leaf in enumerate(leaves):
-            name = leaf.get("name", f"leaf-{i + 1}")
+            name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
             loopback = leaf.get("loopback", leaf.get("ip", f"10.0.0.{len(spines) + i + 1}"))
             vtep_ip = leaf.get("vtep_ip", f"10.0.1.{i + 1}")
             asn = leaf.get("asn", bgp_as + i + 1)
@@ -406,7 +409,7 @@ router bgp {asn}
     elif platform in ("srlinux", "nokia"):
         # Generate Nokia SR Linux configs
         for i, spine in enumerate(spines):
-            name = spine.get("name", f"spine-{i + 1}")
+            name = _sanitize_name(spine.get("name", f"spine-{i + 1}"))
             loopback = spine.get("loopback", spine.get("ip", f"10.0.0.{i + 1}"))
 
             config = f"""# Spine {name} SR Linux Configuration
@@ -418,7 +421,7 @@ set / interface system0 subinterface 0 ipv4 address {loopback}/32
             configs[name] = config
 
         for i, leaf in enumerate(leaves):
-            name = leaf.get("name", f"leaf-{i + 1}")
+            name = _sanitize_name(leaf.get("name", f"leaf-{i + 1}"))
             loopback = leaf.get("loopback", leaf.get("ip", f"10.0.0.{len(spines) + i + 1}"))
 
             config = f"""# Leaf {name} SR Linux Configuration

@@ -1216,7 +1216,9 @@ def export(
         evpn-ninja export all --output-dir ./automation
     """
     from ipaddress import IPv4Network
+    from itertools import islice
 
+    from evpn_ninja.calculators.fabric import MAX_SPINE_COUNT, MAX_VTEP_COUNT
     from evpn_ninja.exporters.ansible import (
         export_ansible_inventory,
         export_ansible_vars,
@@ -1251,13 +1253,28 @@ def export(
         console.print(f"Valid options: {', '.join(valid_formats)}")
         raise typer.Exit(1) from None
 
-    # Generate device lists
-    loopback_network = IPv4Network(loopback_net)
-    vtep_network = IPv4Network(vtep_net)
-    loopback_hosts = list(loopback_network.hosts())
-    vtep_hosts = list(vtep_network.hosts())
+    # Validate device counts before allocating anything to prevent uncontrolled
+    # resource consumption (CWE-400).
+    if spines < 1 or leaves < 1:
+        console.print("[red]Error: --spines and --leaves must be positive integers[/red]")
+        raise typer.Exit(1) from None
+    if spines > MAX_SPINE_COUNT:
+        console.print(f"[red]Error: --spines must be <= {MAX_SPINE_COUNT}, got {spines}[/red]")
+        raise typer.Exit(1) from None
+    if leaves > MAX_VTEP_COUNT:
+        console.print(f"[red]Error: --leaves must be <= {MAX_VTEP_COUNT}, got {leaves}[/red]")
+        raise typer.Exit(1) from None
 
+    # Generate device lists. Only materialize the host IPs actually needed so a
+    # large CIDR (e.g. 10.0.0.0/8) cannot exhaust memory via IPv4Network.hosts().
+    # strict=False matches the network_callback validation; avoids an uncaught
+    # ValueError when a user passes an address with host bits set.
+    loopback_network = IPv4Network(loopback_net, strict=False)
+    vtep_network = IPv4Network(vtep_net, strict=False)
     total_devices = spines + leaves
+    loopback_hosts = list(islice(loopback_network.hosts(), total_devices))
+    vtep_hosts = list(islice(vtep_network.hosts(), leaves))
+
     if len(loopback_hosts) < total_devices:
         console.print(
             f"[red]Error: loopback network {loopback_net} has only {len(loopback_hosts)} "
